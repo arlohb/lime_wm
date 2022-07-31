@@ -5,7 +5,8 @@
     clippy::missing_panics_doc,
     clippy::missing_errors_doc,
     clippy::cast_possible_truncation,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    clippy::let_underscore_drop
 )]
 
 pub mod cursor;
@@ -15,6 +16,8 @@ pub mod render;
 pub mod shell;
 pub mod state;
 pub use state::{CalloopData, ClientState, LimeWmState};
+mod helpers;
+pub use helpers::*;
 pub mod udev;
 #[cfg(feature = "xwayland")]
 pub mod xwayland;

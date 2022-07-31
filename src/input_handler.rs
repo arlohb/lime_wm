@@ -1,4 +1,4 @@
-use std::{process::Command, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use crate::{shell::FullscreenSurface, LimeWmState};
 
@@ -54,13 +54,7 @@ impl<Backend> LimeWmState<Backend> {
             KeyAction::Run(cmd) => {
                 slog::info!(self.log, "Starting program"; "cmd" => cmd.clone());
 
-                if let Err(e) = Command::new(&cmd).spawn() {
-                    slog::error!(self.log,
-                        "Failed to start program";
-                        "cmd" => cmd,
-                        "err" => format!("{:?}", e)
-                    );
-                }
+                crate::spawn(&self.log, cmd);
             }
 
             _ => unreachable!(
@@ -813,6 +807,8 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Optio
         Some(KeyAction::Run("kitty".into()))
     } else if modifiers.logo && keysym == xkb::KEY_e {
         Some(KeyAction::Run("thunar".into()))
+    } else if modifiers.logo && keysym == xkb::KEY_space {
+        Some(KeyAction::Run("rofi -show drun".into()))
     } else if modifiers.logo && keysym >= xkb::KEY_1 && keysym <= xkb::KEY_9 {
         Some(KeyAction::Screen((keysym - xkb::KEY_1) as usize))
     } else if modifiers.logo && modifiers.shift && keysym == xkb::KEY_M {
