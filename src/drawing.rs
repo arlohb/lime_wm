@@ -3,7 +3,6 @@
 use std::sync::Mutex;
 
 use slog::Logger;
-#[cfg(feature = "debug")]
 use smithay::utils::Buffer;
 use smithay::{
     backend::renderer::{Frame, ImportAll, Renderer, Texture},
@@ -22,7 +21,6 @@ smithay::custom_elements! {
     pub CustomElem<R>;
     SurfaceTree=SurfaceTree,
     PointerElement=PointerElement::<<R as Renderer>::TextureId>,
-    #[cfg(feature = "debug")]
     FpsElement=FpsElement::<<R as Renderer>::TextureId>,
 }
 
@@ -142,16 +140,13 @@ where
     }
 }
 
-#[cfg(feature = "debug")]
 pub static FPS_NUMBERS_PNG: &[u8] = include_bytes!("../resources/numbers.png");
 
-#[cfg(feature = "debug")]
 pub struct FpsElement<T: Texture> {
     value: u32,
     texture: T,
 }
 
-#[cfg(feature = "debug")]
 impl<R> RenderElement<R> for FpsElement<<R as Renderer>::TextureId>
 where
     R: Renderer + ImportAll,
@@ -254,7 +249,6 @@ where
     }
 }
 
-#[cfg(feature = "debug")]
 pub fn draw_fps<R>(
     texture: &<R as Renderer>::TextureId,
     value: u32,

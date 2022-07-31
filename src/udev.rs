@@ -11,7 +11,6 @@ use std::{
 
 use slog::Logger;
 
-#[cfg(feature = "debug")]
 use crate::drawing::{draw_fps, FpsElement, FPS_NUMBERS_PNG};
 
 use crate::{
@@ -80,7 +79,6 @@ smithay::custom_elements! {
     pub CustomElem<=UdevRenderer<'_>>;
     SurfaceTree=SurfaceTree,
     PointerElement=PointerElement::<MultiTexture>,
-    #[cfg(feature = "debug")]
     FpsElement=FpsElement::<MultiTexture>,
 }
 
@@ -107,7 +105,6 @@ pub struct UdevData {
     gpus: GpuManager<EglGlesBackend>,
     backends: HashMap<DrmNode, BackendData>,
     pointer_images: Vec<(xcursor::parser::Image, MultiTexture)>,
-    #[cfg(feature = "debug")]
     fps_texture: MultiTexture,
     signaler: Signaler<SessionSignal>,
     pointer_image: crate::cursor::Cursor,
@@ -215,7 +212,6 @@ pub fn run_udev(log: &Logger) {
     let mut gpus =
         GpuManager::new(EglGlesBackend, log.clone()).expect("Failed to create GPU manager");
     #[cfg_attr(not(feature = "egl"), allow(unused_mut))]
-    #[cfg(any(feature = "egl", feature = "debug"))]
     let mut renderer = gpus
         .renderer::<Gles2Renderbuffer>(&primary_gpu, &primary_gpu)
         .expect("Failed to create renderer");
@@ -232,14 +228,12 @@ pub fn run_udev(log: &Logger) {
         }
     }
 
-    #[cfg(feature = "debug")]
     let fps_image = image::io::Reader::with_format(
         std::io::Cursor::new(FPS_NUMBERS_PNG),
         image::ImageFormat::Png,
     )
     .decode()
     .expect("Failed to decode FPS image");
-    #[cfg(feature = "debug")]
     let fps_texture = renderer
         .import_memory(
             &fps_image.to_rgba8(),
@@ -280,7 +274,6 @@ pub fn run_udev(log: &Logger) {
         signaler: session_signal.clone(),
         pointer_image: crate::cursor::Cursor::load(log),
         pointer_images: Vec::new(),
-        #[cfg(feature = "debug")]
         fps_texture,
         logger: log.clone(),
     };
@@ -379,7 +372,6 @@ struct SurfaceData {
     render_node: DrmNode,
     surface: RenderSurface,
     global: Option<GlobalId>,
-    #[cfg(feature = "debug")]
     fps: fps_ticker::Fps,
 }
 
@@ -553,7 +545,6 @@ fn scan_connectors(
                 render_node,
                 surface: gbm_surface,
                 global: Some(global),
-                #[cfg(feature = "debug")]
                 fps: fps_ticker::Fps::default(),
             })));
 
@@ -830,7 +821,6 @@ impl LimeWmState<UdevData> {
                 &mut self.space,
                 self.pointer_location,
                 &pointer_image,
-                #[cfg(feature = "debug")]
                 &self.backend_data.fps_texture,
                 &self.dnd_icon,
                 &mut *self
@@ -889,7 +879,7 @@ fn render_surface(
     space: &mut Space,
     pointer_location: Point<f64, Logical>,
     pointer_image: &MultiTexture,
-    #[cfg(feature = "debug")] fps_texture: &MultiTexture,
+    fps_texture: &MultiTexture,
     dnd_icon: &Option<wl_surface::WlSurface>,
     cursor_status: &mut CursorImageStatus,
     logger: &slog::Logger,
@@ -945,14 +935,13 @@ fn render_surface(
             }
         }
 
-        #[cfg(feature = "debug")]
-        {
+        if std::env::args().any(|arg| arg == "--fps") {
             elements.push(
                 #[allow(clippy::cast_sign_loss)]
                 draw_fps::<UdevRenderer<'_>>(fps_texture, surface.fps.avg().round() as u32).into(),
             );
-            surface.fps.tick();
         }
+        surface.fps.tick();
     }
 
     // and draw to our buffer
