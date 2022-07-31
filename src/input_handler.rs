@@ -29,9 +29,6 @@ use smithay::{
 
 use smithay::backend::input::PointerMotionAbsoluteEvent;
 
-#[cfg(any(feature = "winit", feature = "x11"))]
-use smithay::wayland::output::Output;
-
 use crate::state::Backend;
 use smithay::{
     backend::{
