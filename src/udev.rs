@@ -169,8 +169,10 @@ impl Backend for UdevData {
 }
 
 pub fn run_udev(log: &Logger) {
-    let mut event_loop = EventLoop::try_new().expect("Failed to create event loop");
-    let mut display = Display::new().expect("Failed to create wayland display");
+    let mut event_loop: EventLoop<CalloopData<UdevData>> =
+        EventLoop::try_new().expect("Failed to create event loop");
+    let mut display: Display<LimeWmState<UdevData>> =
+        Display::new().expect("Failed to create wayland display");
 
     /*
      * Initialize session
