@@ -18,5 +18,5 @@ fn main() {
     slog_stdlog::init().expect("Could not setup log backend");
 
     slog::info!(log, "Starting lime_wm on a tty using udev");
-    lime_wm::udev::run_udev(log);
+    lime_wm::udev::run_udev(&log);
 }

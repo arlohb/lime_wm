@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::TryFrom, os::unix::net::UnixStream, sync::Arc};
+use std::{collections::HashMap, os::unix::net::UnixStream, sync::Arc};
 
 use crate::LimeWmState;
 use smithay::{
@@ -14,7 +14,7 @@ use x11rb::{
         composite::{ConnectionExt as _, Redirect},
         xproto::{
             ChangeWindowAttributesAux, ConfigWindow, ConfigureWindowAux, ConnectionExt as _,
-            EventMask, Window as X11Window, WindowClass,
+            CreateWindowAux, EventMask, Window as X11Window, WindowClass,
         },
         Event,
     },
@@ -29,35 +29,41 @@ impl<BackendData: 'static> LimeWmState<BackendData> {
     }
 
     pub fn xwayland_ready(&mut self, connection: UnixStream, client: Client) {
-        let (wm, source) = X11State::start_wm(connection, client, self.log.clone()).unwrap();
+        let (wm, source) = X11State::start_wm(connection, client, self.log.clone())
+            .expect("Failed to start XWayland");
         self.x11_state = Some(wm);
         let log = self.log.clone();
         self.handle
             .insert_source(source, move |event, _, data| {
                 if let Some(x11) = data.state.x11_state.as_mut() {
-                    match x11.handle_event(event, &data.display.handle(), &mut data.state.space) {
+                    match x11.handle_event(&event, &data.display.handle(), &mut data.state.space) {
                         Ok(()) => {}
                         Err(err) => error!(log, "Error while handling X11 event: {}", err),
                     }
                 }
             })
-            .unwrap();
+            .expect("Failed to insert XWayland source into eventloop");
     }
 
     pub fn xwayland_exited(&mut self) {
-        let _ = self.x11_state.take();
+        let _state = self.x11_state.take();
         error!(self.log, "Xwayland crashed");
     }
 }
 
-x11rb::atom_manager! {
-    Atoms: AtomsCookie {
-        WM_S0,
-        WL_SURFACE_ID,
-        _LIME_WM_CLOSE_CONNECTION,
+#[allow(clippy::used_underscore_binding)]
+mod x {
+    x11rb::atom_manager! {
+        pub Atoms: AtomsCookie {
+            WM_S0,
+            WL_SURFACE_ID,
+            _LIME_WM_CLOSE_CONNECTION,
+        }
     }
 }
+pub use x::*;
 
+#[allow(clippy::doc_markdown)]
 /// The actual runtime state of the XWayland integration.
 #[derive(Debug)]
 pub struct X11State {
@@ -102,7 +108,7 @@ impl X11State {
             0,
             WindowClass::INPUT_OUTPUT,
             x11rb::COPY_FROM_PARENT,
-            &Default::default(),
+            &CreateWindowAux::default(),
         )?;
         conn.set_selection_owner(win, atoms.WM_S0, x11rb::CURRENT_TIME)?;
 
@@ -116,19 +122,20 @@ impl X11State {
             conn: Arc::clone(&conn),
             atoms,
             client,
-            unpaired_surfaces: Default::default(),
+            unpaired_surfaces: HashMap::default(),
             log: log.clone(),
         };
 
         Ok((
             wm,
+            #[allow(clippy::used_underscore_binding)]
             X11Source::new(conn, win, atoms._LIME_WM_CLOSE_CONNECTION, log),
         ))
     }
 
     fn handle_event(
         &mut self,
-        event: Event,
+        event: &Event,
         dh: &DisplayHandle,
         space: &mut Space,
     ) -> Result<(), ReplyOrIdError> {
@@ -144,19 +151,19 @@ impl X11State {
                     aux = aux.sibling(r.sibling);
                 }
                 if r.value_mask & u16::from(ConfigWindow::X) != 0 {
-                    aux = aux.x(i32::try_from(r.x).unwrap());
+                    aux = aux.x(i32::from(r.x));
                 }
                 if r.value_mask & u16::from(ConfigWindow::Y) != 0 {
-                    aux = aux.y(i32::try_from(r.y).unwrap());
+                    aux = aux.y(i32::from(r.y));
                 }
                 if r.value_mask & u16::from(ConfigWindow::WIDTH) != 0 {
-                    aux = aux.width(u32::try_from(r.width).unwrap());
+                    aux = aux.width(u32::from(r.width));
                 }
                 if r.value_mask & u16::from(ConfigWindow::HEIGHT) != 0 {
-                    aux = aux.height(u32::try_from(r.height).unwrap());
+                    aux = aux.height(u32::from(r.height));
                 }
                 if r.value_mask & u16::from(ConfigWindow::BORDER_WIDTH) != 0 {
-                    aux = aux.border_width(u32::try_from(r.border_width).unwrap());
+                    aux = aux.border_width(u32::from(r.border_width));
                 }
                 self.conn.configure_window(r.window, &aux)?;
             }
@@ -174,7 +181,7 @@ impl X11State {
 
                     let location = {
                         match self.conn.get_geometry(msg.window)?.reply() {
-                            Ok(geo) => (geo.x as i32, geo.y as i32).into(),
+                            Ok(geo) => (i32::from(geo.x), i32::from(geo.y)).into(),
                             Err(err) => {
                                 error!(
                                     self.log,

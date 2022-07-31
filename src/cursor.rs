@@ -13,7 +13,8 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    pub fn load(log: &::slog::Logger) -> Cursor {
+    #[must_use]
+    pub fn load(log: &::slog::Logger) -> Self {
         let name = std::env::var("XCURSOR_THEME")
             .ok()
             .unwrap_or_else(|| "default".into());
@@ -24,7 +25,13 @@ impl Cursor {
 
         let theme = CursorTheme::load(&name);
         let icons = load_icon(&theme)
-            .map_err(|err| slog::warn!(log, "Unable to load xcursor: {}, using fallback cursor", err))
+            .map_err(|err| {
+                slog::warn!(
+                    log,
+                    "Unable to load xcursor: {}, using fallback cursor",
+                    err
+                );
+            })
             .unwrap_or_else(|_| {
                 vec![Image {
                     size: 32,
@@ -38,9 +45,10 @@ impl Cursor {
                 }]
             });
 
-        Cursor { icons, size }
+        Self { icons, size }
     }
 
+    #[must_use]
     pub fn get_image(&self, scale: u32, millis: u32) -> Image {
         let size = self.size * scale;
         frame(millis, size, &self.icons)
@@ -51,12 +59,12 @@ fn nearest_images(size: u32, images: &[Image]) -> impl Iterator<Item = &Image> {
     // Follow the nominal size of the cursor to choose the nearest
     let nearest_image = images
         .iter()
-        .min_by_key(|image| (size as i32 - image.size as i32).abs())
-        .unwrap();
+        .min_by_key(|image| size.abs_diff(image.size))
+        .expect("No images given to nearest_images");
 
-    images
-        .iter()
-        .filter(move |image| image.width == nearest_image.width && image.height == nearest_image.height)
+    images.iter().filter(move |image| {
+        image.width == nearest_image.width && image.height == nearest_image.height
+    })
 }
 
 fn frame(mut millis: u32, size: u32, images: &[Image]) -> Image {

@@ -24,7 +24,19 @@ xkbcommon = "0.4.0"
 git = "https://github.com/Smithay/smithay"
 rev = "32d9be7"
 default-features = false
-features = [ "desktop", "wayland_frontend", "slog-stdlog" ]
+features = [
+    "desktop",
+    "wayland_frontend",
+    "slog-stdlog",
+    "backend_libinput",
+    "backend_udev",
+    "backend_drm",
+    "backend_gbm",
+    "backend_egl",
+    "backend_session",
+    "renderer_gl",
+    "renderer_multi",
+]
 
 [dependencies.x11rb]
 optional = true
@@ -36,9 +48,8 @@ features = [ "composite" ]
 gl_generator = "0.14"
 
 [features]
-default = [ "egl", "udev", "logind", "xwayland" ]
+default = [ "egl", "logind", "xwayland", "image", "xcursor" ]
 egl = [ "smithay/use_system_lib", "smithay/backend_egl" ]
-udev = [ "smithay/backend_libinput", "smithay/backend_udev", "smithay/backend_drm", "smithay/backend_gbm", "smithay/backend_egl", "smithay/backend_session", "image", "smithay/renderer_gl", "smithay/renderer_multi", "xcursor" ]
 logind = [ "smithay/backend_session_logind" ]
 elogind = ["logind", "smithay/backend_session_elogind" ]
 libseat = ["smithay/backend_session_libseat" ]

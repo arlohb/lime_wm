@@ -3,7 +3,7 @@ use std::{
     cell::RefCell,
     collections::hash_map::{Entry, HashMap},
     os::unix::io::{AsRawFd, RawFd},
-    path::PathBuf,
+    path::Path,
     rc::Rc,
     sync::atomic::Ordering,
     time::Duration,
@@ -12,7 +12,7 @@ use std::{
 use slog::Logger;
 
 use crate::{
-    drawing::*,
+    drawing::{draw_cursor, draw_dnd_icon, PointerElement, CLEAR_COLOR},
     state::{Backend, CalloopData, LimeWmState},
 };
 #[cfg(feature = "egl")]
@@ -114,7 +114,12 @@ pub struct UdevData {
 #[cfg(feature = "egl")]
 impl DmabufHandler for LimeWmState<UdevData> {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
-        &mut self.backend_data.dmabuf_state.as_mut().unwrap().0
+        &mut self
+            .backend_data
+            .dmabuf_state
+            .as_mut()
+            .expect("Dmabuf not found")
+            .0
     }
 
     fn dmabuf_imported(
@@ -163,9 +168,9 @@ impl Backend for UdevData {
     }
 }
 
-pub fn run_udev(log: Logger) {
-    let mut event_loop = EventLoop::try_new().unwrap();
-    let mut display = Display::new().unwrap();
+pub fn run_udev(log: &Logger) {
+    let mut event_loop = EventLoop::try_new().expect("Failed to create event loop");
+    let mut display = Display::new().expect("Failed to create wayland display");
 
     /*
      * Initialize session
@@ -186,7 +191,7 @@ pub fn run_udev(log: Logger) {
         DrmNode::from_path(var).expect("Invalid drm device path")
     } else {
         primary_gpu(&session.seat())
-            .unwrap()
+            .expect("Failed to find primary GPU")
             .and_then(|x| {
                 DrmNode::from_path(x)
                     .ok()?
@@ -195,7 +200,7 @@ pub fn run_udev(log: Logger) {
             })
             .unwrap_or_else(|| {
                 all_gpus(&session.seat())
-                    .unwrap()
+                    .expect("Failure to find all GPUs")
                     .into_iter()
                     .find_map(|x| DrmNode::from_path(x).ok())
                     .expect("No GPU!")
@@ -204,12 +209,13 @@ pub fn run_udev(log: Logger) {
     info!(log, "Using {} as primary gpu.", primary_gpu);
 
     #[cfg_attr(not(feature = "egl"), allow(unused_mut))]
-    let mut gpus = GpuManager::new(EglGlesBackend, log.clone()).unwrap();
+    let mut gpus =
+        GpuManager::new(EglGlesBackend, log.clone()).expect("Failed to create GPU manager");
     #[cfg_attr(not(feature = "egl"), allow(unused_mut))]
     #[cfg(any(feature = "egl", feature = "debug"))]
     let mut renderer = gpus
         .renderer::<Gles2Renderbuffer>(&primary_gpu, &primary_gpu)
-        .unwrap();
+        .expect("Failed to create renderer");
 
     #[cfg(feature = "egl")]
     {
@@ -243,7 +249,7 @@ pub fn run_udev(log: Logger) {
     #[cfg(feature = "egl")]
     let dmabuf_state = if renderer.bind_wl_display(&display.handle()).is_ok() {
         info!(log, "EGL hardware-acceleration enabled");
-        let dmabuf_formats = renderer.dmabuf_formats().cloned().collect::<Vec<_>>();
+        let dmabuf_formats = renderer.dmabuf_formats().copied().collect::<Vec<_>>();
         let mut state = DmabufState::new();
         let global = state.create_global::<LimeWmState<UdevData>, _>(
             &display.handle(),
@@ -264,7 +270,7 @@ pub fn run_udev(log: Logger) {
         gpus,
         backends: HashMap::new(),
         signaler: session_signal.clone(),
-        pointer_image: crate::cursor::Cursor::load(&log),
+        pointer_image: crate::cursor::Cursor::load(log),
         pointer_images: Vec::new(),
         #[cfg(feature = "debug")]
         fps_texture,
@@ -293,7 +299,9 @@ pub fn run_udev(log: Logger) {
     let mut libinput_context = Libinput::new_with_udev::<LibinputSessionInterface<AutoSession>>(
         state.backend_data.session.clone().into(),
     );
-    libinput_context.udev_assign_seat(&state.seat_name).unwrap();
+    libinput_context
+        .udev_assign_seat(&state.seat_name)
+        .expect("Failed to assign udev seat");
     let mut libinput_backend = LibinputInputBackend::new(libinput_context, log.clone());
     libinput_backend.link(session_signal);
 
@@ -304,29 +312,29 @@ pub fn run_udev(log: Logger) {
         .handle()
         .insert_source(libinput_backend, move |event, _, data| {
             let dh = data.state.backend_data.dh.clone();
-            data.state.process_input_event(&dh, event)
+            data.state.process_input_event(&dh, event);
         })
-        .unwrap();
+        .expect("Failed to insert event loop source");
     event_loop
         .handle()
         .insert_source(notifier, |(), &mut (), _data| {})
-        .unwrap();
+        .expect("Failed to insert event loop source");
     for (dev, path) in udev_backend.device_list() {
-        state.device_added(&mut display, dev, path.into())
+        state.device_added(&mut display, dev, path);
     }
 
     event_loop
         .handle()
         .insert_source(udev_backend, move |event, _, data| match event {
             UdevEvent::Added { device_id, path } => {
-                data.state.device_added(&mut data.display, device_id, path)
+                data.state.device_added(&mut data.display, device_id, &path);
             }
             UdevEvent::Changed { device_id } => {
-                data.state.device_changed(&mut data.display, device_id)
+                data.state.device_changed(&mut data.display, device_id);
             }
             UdevEvent::Removed { device_id } => data.state.device_removed(device_id),
         })
-        .unwrap();
+        .expect("Failed to insert event loop source");
 
     /*
      * Start XWayland if supported
@@ -348,7 +356,9 @@ pub fn run_udev(log: Logger) {
         } else {
             state.space.refresh(&display.handle());
             state.popups.cleanup();
-            display.flush_clients().unwrap();
+            display
+                .flush_clients()
+                .expect("Failed to flush display buffers");
         }
     }
 }
@@ -391,13 +401,19 @@ fn scan_connectors(
     logger: &::slog::Logger,
 ) -> HashMap<crtc::Handle, Rc<RefCell<SurfaceData>>> {
     // Get a set of all modesetting resource handles (excluding planes):
-    let res_handles = device.resource_handles().unwrap();
+    let res_handles = device
+        .resource_handles()
+        .expect("Failed to get resource handles");
 
     // Find all connected output ports.
     let connector_infos: Vec<ConnectorInfo> = res_handles
         .connectors()
         .iter()
-        .map(|conn| device.get_connector(*conn).unwrap())
+        .map(|conn| {
+            device
+                .get_connector(*conn)
+                .expect("Failed to get connector")
+        })
         .filter(|conn| conn.state() == ConnectorState::Connected)
         .inspect(|conn| info!(logger, "Connected: {:?}", conn.interface()))
         .collect();
@@ -405,7 +421,8 @@ fn scan_connectors(
     let mut backends = HashMap::new();
 
     let (render_node, formats) = {
-        let display = EGLDisplay::new(&*gbm.borrow(), logger.clone()).unwrap();
+        let display =
+            EGLDisplay::new(&*gbm.borrow(), logger.clone()).expect("Failed to create EGL display");
         let node = match EGLDevice::device_for_display(&display)
             .ok()
             .and_then(|x| x.try_get_render_node().ok().flatten())
@@ -413,7 +430,8 @@ fn scan_connectors(
             Some(node) => node,
             None => return HashMap::new(),
         };
-        let context = EGLContext::new(&display, logger.clone()).unwrap();
+        let context =
+            EGLContext::new(&display, logger.clone()).expect("Failed to create EGL context");
         (node, context.dmabuf_render_formats().clone())
     };
 
@@ -470,8 +488,10 @@ fn scan_connectors(
 
             let size = mode.size();
             let mode = Mode {
-                size: (size.0 as i32, size.1 as i32).into(),
-                refresh: mode.vrefresh() as i32 * 1000,
+                size: (i32::from(size.0), i32::from(size.1)).into(),
+                refresh: i32::try_from(mode.vrefresh())
+                    .expect("Vertical refresh rate doesn't fit in a i32")
+                    * 1000,
             };
 
             let interface_short_name = match connector_info.interface() {
@@ -492,7 +512,11 @@ fn scan_connectors(
             let output = Output::new(
                 output_name,
                 PhysicalProperties {
-                    size: (phys_w as i32, phys_h as i32).into(),
+                    size: (
+                        phys_w.try_into().expect("Size too big for i32"),
+                        phys_h.try_into().expect("Size too big for i32"),
+                    )
+                        .into(),
                     subpixel: wl_output::Subpixel::Unknown,
                     make: "Smithay".into(),
                     model: "Generic DRM".into(),
@@ -501,9 +525,9 @@ fn scan_connectors(
             );
             let global = output.create_global::<LimeWmState<UdevData>>(&display.handle());
             let position = (
-                space
-                    .outputs()
-                    .fold(0, |acc, o| acc + space.output_geometry(o).unwrap().size.w),
+                space.outputs().fold(0, |acc, o| {
+                    acc + space.output_geometry(o).expect("no output geometry").size.w
+                }),
                 0,
             )
                 .into();
@@ -513,7 +537,7 @@ fn scan_connectors(
 
             output
                 .user_data()
-                .insert_if_missing(|| UdevOutputId { crtc, device_id });
+                .insert_if_missing(|| UdevOutputId { device_id, crtc });
 
             entry.insert(Rc::new(RefCell::new(SurfaceData {
                 dh: display.handle(),
@@ -533,11 +557,11 @@ fn scan_connectors(
 }
 
 impl LimeWmState<UdevData> {
-    fn device_added(&mut self, display: &mut Display<Self>, device_id: dev_t, path: PathBuf) {
+    fn device_added(&mut self, display: &mut Display<Self>, device_id: dev_t, path: &Path) {
         // Try to open the device
         let open_flags = OFlag::O_RDWR | OFlag::O_CLOEXEC | OFlag::O_NOCTTY | OFlag::O_NONBLOCK;
-        let device_fd = self.backend_data.session.open(&path, open_flags).ok();
-        let devices = device_fd.map(SessionFd).map(|fd| {
+        let device_file_desc = self.backend_data.session.open(path, open_flags).ok();
+        let devices = device_file_desc.map(SessionFd).map(|fd| {
             (
                 DrmDevice::new(fd, true, self.log.clone()),
                 GbmDevice::new(fd),
@@ -610,7 +634,7 @@ impl LimeWmState<UdevData> {
         let registration_token = self
             .handle
             .register_dispatcher(event_dispatcher.clone())
-            .unwrap();
+            .expect("Failed to register event dispatcher");
 
         for backend in backends.borrow_mut().values() {
             // render first frame
@@ -654,12 +678,10 @@ impl LimeWmState<UdevData> {
                 .filter(|o| {
                     o.user_data()
                         .get::<UdevOutputId>()
-                        .map(|id| id.device_id == node)
-                        .unwrap_or(false)
+                        .map_or(false, |id| id.device_id == node)
                 })
                 .cloned()
                 .collect::<Vec<_>>()
-                .into_iter()
             {
                 self.space.unmap_output(&output);
             }
@@ -709,12 +731,10 @@ impl LimeWmState<UdevData> {
                 .filter(|o| {
                     o.user_data()
                         .get::<UdevOutputId>()
-                        .map(|id| id.device_id == node)
-                        .unwrap_or(false)
+                        .map_or(false, |id| id.device_id == node)
                 })
                 .cloned()
                 .collect::<Vec<_>>()
-                .into_iter()
             {
                 self.space.unmap_output(&output);
             }
@@ -746,7 +766,7 @@ impl LimeWmState<UdevData> {
         let mut surfaces_iter = surfaces.iter();
         let mut option_iter = crtc
             .iter()
-            .flat_map(|crtc| surfaces.get(crtc).map(|surface| (crtc, surface)));
+            .filter_map(|crtc| surfaces.get(crtc).map(|surface| (crtc, surface)));
 
         let to_render_iter: &mut dyn Iterator<Item = (&crtc::Handle, &Rc<RefCell<SurfaceData>>)> =
             if crtc.is_some() {
@@ -766,7 +786,7 @@ impl LimeWmState<UdevData> {
                 .backend_data
                 .gpus
                 .renderer::<Gles2Renderbuffer>(&primary_gpu, &surface.borrow().render_node)
-                .unwrap();
+                .expect("Failed to create renderer");
             let pointer_images = &mut self.backend_data.pointer_images;
             let pointer_image = pointer_images
                 .iter()
@@ -776,7 +796,11 @@ impl LimeWmState<UdevData> {
                     let texture = renderer
                         .import_memory(
                             &frame.pixels_rgba,
-                            (frame.width as i32, frame.height as i32).into(),
+                            (
+                                i32::try_from(frame.width).expect("Frame size too big for i32"),
+                                i32::try_from(frame.height).expect("Frame size too big for i32"),
+                            )
+                                .into(),
                             false,
                         )
                         .expect("Failed to import cursor bitmap");
@@ -794,7 +818,10 @@ impl LimeWmState<UdevData> {
                 #[cfg(feature = "debug")]
                 &self.backend_data.fps_texture,
                 &self.dnd_icon,
-                &mut *self.cursor_status.lock().unwrap(),
+                &mut *self
+                    .cursor_status
+                    .lock()
+                    .expect("Cursor status lock poisoned"),
                 &self.log,
             );
             let reschedule = match result {
@@ -805,11 +832,13 @@ impl LimeWmState<UdevData> {
                         SwapBuffersError::AlreadySwapped => false,
                         SwapBuffersError::TemporaryFailure(err) => !matches!(
                             err.downcast_ref::<DrmError>(),
-                            Some(&DrmError::DeviceInactive)
-                                | Some(&DrmError::Access {
-                                    source: drm::SystemError::PermissionDenied,
-                                    ..
-                                })
+                            Some(
+                                &DrmError::DeviceInactive
+                                    | &DrmError::Access {
+                                        source: drm::SystemError::PermissionDenied,
+                                        ..
+                                    }
+                            )
                         ),
                         SwapBuffersError::ContextLost(err) => {
                             panic!("Rendering loop lost: {}", err)
@@ -864,7 +893,7 @@ fn render_surface(
         // somehow we got called with an invalid output
         return Ok(true);
     };
-    let output_geometry = space.output_geometry(&output).unwrap();
+    let output_geometry = space.output_geometry(&output).expect("no output geometry");
 
     let (dmabuf, age) = surface.surface.next_buffer()?;
     renderer.bind(dmabuf)?;
@@ -939,7 +968,9 @@ fn schedule_initial_render(
 ) {
     let node = surface.borrow().render_node;
     let result = {
-        let mut renderer = gpus.renderer::<Gles2Renderbuffer>(&node, &node).unwrap();
+        let mut renderer = gpus
+            .renderer::<Gles2Renderbuffer>(&node, &node)
+            .expect("Failed to create renderer");
         let mut surface = surface.borrow_mut();
         initial_render(&mut surface.surface, &mut renderer)
     };
@@ -956,7 +987,7 @@ fn schedule_initial_render(
                         surface,
                         &handle,
                         logger,
-                    )
+                    );
                 });
             }
             SwapBuffersError::ContextLost(err) => panic!("Rendering loop lost: {}", err),

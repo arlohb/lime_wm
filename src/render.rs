@@ -8,7 +8,7 @@ use smithay::{
     wayland::output::Output,
 };
 
-use crate::{drawing::*, shell::FullscreenSurface};
+use crate::{drawing::CLEAR_COLOR, shell::FullscreenSurface};
 
 pub fn render_output<R, E>(
     output: &Output,
@@ -26,10 +26,10 @@ where
     if let Some(window) = output
         .user_data()
         .get::<FullscreenSurface>()
-        .and_then(|f| f.get())
+        .and_then(FullscreenSurface::get)
     {
         let transform = output.current_transform().into();
-        let mode = output.current_mode().unwrap();
+        let mode = output.current_mode().expect("output has no mode");
         let scale = output.current_scale().fractional_scale();
         let output_geo = space
             .output_geometry(output)
@@ -37,7 +37,10 @@ where
         renderer
             .render(mode.size, transform, |renderer, frame| {
                 let mut damage = window.accumulated_damage((0.0, 0.0), scale, None);
-                frame.clear(CLEAR_COLOR, &[Rectangle::from_loc_and_size((0, 0), mode.size)])?;
+                frame.clear(
+                    CLEAR_COLOR,
+                    &[Rectangle::from_loc_and_size((0, 0), mode.size)],
+                )?;
                 draw_window(
                     renderer,
                     frame,
@@ -58,7 +61,8 @@ where
                 )?;
                 for elem in elements {
                     let geo = elem.geometry(scale);
-                    let location = elem.location(scale) - output_geo.loc.to_physical_precise_round(scale);
+                    let location =
+                        elem.location(scale) - output_geo.loc.to_physical_precise_round(scale);
                     elem.draw(
                         renderer,
                         frame,
@@ -74,6 +78,12 @@ where
             .and_then(std::convert::identity)
             .map_err(RenderError::<R>::Rendering)
     } else {
-        space.render_output(&mut *renderer, output, age as usize, CLEAR_COLOR, &*elements)
+        space.render_output(
+            &mut *renderer,
+            output,
+            age as usize,
+            CLEAR_COLOR,
+            &*elements,
+        )
     }
 }

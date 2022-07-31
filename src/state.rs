@@ -5,8 +5,8 @@ use std::{
 
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
-    delegate_primary_selection, delegate_seat, delegate_shm, delegate_tablet_manager,
-    delegate_viewporter, delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_primary_selection, delegate_shm, delegate_tablet_manager, delegate_viewporter,
+    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{PopupManager, Space, WindowSurfaceType},
     reexports::{
         calloop::{generic::Generic, Interest, LoopHandle, Mode, PostAction},
@@ -83,7 +83,7 @@ pub struct LimeWmState<BackendData: 'static> {
     pub layer_shell_state: WlrLayerShellState,
     pub output_manager_state: OutputManagerState,
     pub primary_selection_state: PrimarySelectionState,
-    pub seat_state: SeatState<LimeWmState<BackendData>>,
+    pub seat_state: SeatState<Self>,
     pub shm_state: ShmState,
     pub viewporter_state: ViewporterState,
     pub xdg_activation_state: XdgActivationState,
@@ -98,7 +98,7 @@ pub struct LimeWmState<BackendData: 'static> {
     pub pointer_location: Point<f64, Logical>,
     pub cursor_status: Arc<Mutex<CursorImageStatus>>,
     pub seat_name: String,
-    pub seat: Seat<LimeWmState<BackendData>>,
+    pub seat: Seat<Self>,
     pub start_time: std::time::Instant,
 
     #[cfg(feature = "xwayland")]
@@ -154,11 +154,18 @@ impl<BackendData> ShmHandler for LimeWmState<BackendData> {
 delegate_shm!(@<BackendData: 'static> LimeWmState<BackendData>);
 
 impl<BackendData> SeatHandler for LimeWmState<BackendData> {
-    fn seat_state(&mut self) -> &mut SeatState<LimeWmState<BackendData>> {
+    fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
     }
 }
-delegate_seat!(@<BackendData: 'static> LimeWmState<BackendData>);
+
+// This is a false positive
+// Needs to be in a mod for allow to be used on macro
+#[allow(clippy::use_self)]
+mod x {
+    smithay::delegate_seat!(@<BackendData: 'static> crate::LimeWmState<BackendData>);
+}
+pub use x::*;
 
 delegate_tablet_manager!(@<BackendData: 'static> LimeWmState<BackendData>);
 
@@ -226,15 +233,16 @@ delegate_layer_shell!(@<BackendData: 'static> LimeWmState<BackendData>);
 
 impl<BackendData: Backend + 'static> LimeWmState<BackendData> {
     pub fn init(
-        display: &mut Display<LimeWmState<BackendData>>,
+        display: &mut Display<Self>,
         handle: LoopHandle<'static, CalloopData<BackendData>>,
         backend_data: BackendData,
         log: slog::Logger,
         listen_on_socket: bool,
-    ) -> LimeWmState<BackendData> {
+    ) -> Self {
         // init wayland clients
         let socket_name = if listen_on_socket {
-            let source = ListeningSocketSource::new_auto(log.clone()).unwrap();
+            let source = ListeningSocketSource::new_auto(log.clone())
+                .expect("Failed to create listening socket");
             let socket_name = source.socket_name().to_string_lossy().into_owned();
             handle
                 .insert_source(source, |client_stream, _, data| {
@@ -257,7 +265,9 @@ impl<BackendData: Backend + 'static> LimeWmState<BackendData> {
             .insert_source(
                 Generic::new(display.backend().poll_fd(), Interest::READ, Mode::Level),
                 |_, _, data| {
-                    data.display.dispatch_clients(&mut data.state).unwrap();
+                    data.display
+                        .dispatch_clients(&mut data.state)
+                        .expect("Failed to dispatch requests");
                     Ok(PostAction::Continue)
                 },
             )
@@ -283,7 +293,9 @@ impl<BackendData: Backend + 'static> LimeWmState<BackendData> {
 
         let cursor_status = Arc::new(Mutex::new(CursorImageStatus::Default));
         let cursor_status2 = cursor_status.clone();
-        seat.add_pointer(move |new_status| *cursor_status2.lock().unwrap() = new_status);
+        seat.add_pointer(move |new_status| {
+            *cursor_status2.lock().expect("Cursor status lock poisoned") = new_status;
+        });
 
         seat.add_keyboard(XkbConfig::default(), 200, 25, move |seat, surface| {
             let focus = surface.and_then(|s| dh.get_client(s.id()).ok());
@@ -297,7 +309,7 @@ impl<BackendData: Backend + 'static> LimeWmState<BackendData> {
         seat.tablet_seat()
             .on_cursor_surface(move |_tool, new_status| {
                 // TODO: tablet tools should have their own cursors
-                *cursor_status3.lock().unwrap() = new_status;
+                *cursor_status3.lock().expect("Cursor status lock poisoned") = new_status;
             });
 
         #[cfg(feature = "xwayland")]
@@ -318,7 +330,7 @@ impl<BackendData: Backend + 'static> LimeWmState<BackendData> {
             xwayland
         };
 
-        LimeWmState {
+        Self {
             backend_data,
             socket_name,
             running: Arc::new(AtomicBool::new(true)),

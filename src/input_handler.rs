@@ -2,7 +2,6 @@ use std::{process::Command, sync::atomic::Ordering};
 
 use crate::{shell::FullscreenSurface, LimeWmState};
 
-#[cfg(feature = "udev")]
 use crate::udev::UdevData;
 
 use smithay::{
@@ -28,15 +27,12 @@ use smithay::{
     },
 };
 
-#[cfg(any(feature = "winit", feature = "x11", feature = "udev"))]
 use smithay::backend::input::PointerMotionAbsoluteEvent;
 
 #[cfg(any(feature = "winit", feature = "x11"))]
 use smithay::wayland::output::Output;
 
-#[cfg(feature = "udev")]
 use crate::state::Backend;
-#[cfg(feature = "udev")]
 use smithay::{
     backend::{
         input::{
@@ -80,16 +76,14 @@ impl<Backend> LimeWmState<Backend> {
     fn keyboard_key_to_action<B: InputBackend>(
         &mut self,
         dh: &DisplayHandle,
-        evt: B::KeyboardKeyEvent,
+        evt: &B::KeyboardKeyEvent,
     ) -> KeyAction {
         let keycode = evt.key_code();
         let state = evt.state();
         debug!(self.log, "key"; "keycode" => keycode, "state" => format!("{:?}", state));
         let serial = SCOUNTER.next_serial();
-        let log = &self.log;
-        let time = Event::time(&evt);
-        let suppressed_keys = &mut self.suppressed_keys;
-        let keyboard = self.seat.get_keyboard().unwrap();
+        let time = Event::time(evt);
+        let keyboard = self.seat.get_keyboard().expect("No keyboard found");
 
         for layer in self.layer_shell_state.layer_surfaces().rev() {
             let data = with_states(layer.wl_surface(), |states| {
@@ -110,7 +104,7 @@ impl<Backend> LimeWmState<Backend> {
             .input(dh, keycode, state, serial, time, |modifiers, handle| {
                 let keysym = handle.modified_sym();
 
-                debug!(log, "keysym";
+                debug!(self.log, "keysym";
                     "state" => format!("{:?}", state),
                     "mods" => format!("{:?}", modifiers),
                     "keysym" => ::xkbcommon::xkb::keysym_get_name(keysym)
@@ -121,20 +115,18 @@ impl<Backend> LimeWmState<Backend> {
                 // Additionally add the key to the suppressed keys
                 // so that we can decide on a release if the key
                 // should be forwarded to the client or not.
-                if let KeyState::Pressed = state {
+                if state == KeyState::Pressed {
                     let action = process_keyboard_shortcut(*modifiers, keysym);
 
                     if action.is_some() {
-                        suppressed_keys.push(keysym);
+                        self.suppressed_keys.push(keysym);
                     }
 
-                    action
-                        .map(FilterResult::Intercept)
-                        .unwrap_or(FilterResult::Forward)
+                    action.map_or(FilterResult::Forward, FilterResult::Intercept)
                 } else {
-                    let suppressed = suppressed_keys.contains(&keysym);
+                    let suppressed = self.suppressed_keys.contains(&keysym);
                     if suppressed {
-                        suppressed_keys.retain(|k| *k != keysym);
+                        self.suppressed_keys.retain(|k| *k != keysym);
                         FilterResult::Intercept(KeyAction::None)
                     } else {
                         FilterResult::Forward
@@ -147,7 +139,7 @@ impl<Backend> LimeWmState<Backend> {
     fn on_pointer_button<B: InputBackend>(
         &mut self,
         dh: &DisplayHandle,
-        evt: B::PointerButtonEvent,
+        evt: &B::PointerButtonEvent,
     ) {
         let serial = SCOUNTER.next_serial();
         let button = evt.button_code();
@@ -157,21 +149,24 @@ impl<Backend> LimeWmState<Backend> {
         if wl_pointer::ButtonState::Pressed == state {
             self.update_keyboard_focus(dh, serial);
         };
-        self.seat.get_pointer().unwrap().button(
-            self,
-            dh,
-            &ButtonEvent {
-                button,
-                state,
-                serial,
-                time: evt.time(),
-            },
-        );
+        self.seat
+            .get_pointer()
+            .expect("No mouse pointer found")
+            .button(
+                self,
+                dh,
+                &ButtonEvent {
+                    button,
+                    state,
+                    serial,
+                    time: evt.time(),
+                },
+            );
     }
 
     fn update_keyboard_focus(&mut self, dh: &DisplayHandle, serial: Serial) {
-        let pointer = self.seat.get_pointer().unwrap();
-        let keyboard = self.seat.get_keyboard().unwrap();
+        let pointer = self.seat.get_pointer().expect("No mouse pointer found");
+        let keyboard = self.seat.get_keyboard().expect("No keyboard found");
         // change the keyboard focus unless the pointer or keyboard is grabbed
         // We test for any matching surface type here but always use the root
         // (in case of a window the toplevel) surface for the focus.
@@ -183,11 +178,14 @@ impl<Backend> LimeWmState<Backend> {
         // https://gitlab.freedesktop.org/wayland/wayland/-/issues/294
         if !pointer.is_grabbed() && !keyboard.is_grabbed() {
             if let Some(output) = self.space.output_under(self.pointer_location).next() {
-                let output_geo = self.space.output_geometry(output).unwrap();
+                let output_geo = self
+                    .space
+                    .output_geometry(output)
+                    .expect("No output geometry");
                 if let Some(window) = output
                     .user_data()
                     .get::<FullscreenSurface>()
-                    .and_then(|f| f.get())
+                    .and_then(FullscreenSurface::get)
                 {
                     if window
                         .surface_under(
@@ -211,7 +209,11 @@ impl<Backend> LimeWmState<Backend> {
                             .surface_under(
                                 self.pointer_location
                                     - output_geo.loc.to_f64()
-                                    - layers.layer_geometry(layer).unwrap().loc.to_f64(),
+                                    - layers
+                                        .layer_geometry(layer)
+                                        .expect("No layer geometry")
+                                        .loc
+                                        .to_f64(),
                                 WindowSurfaceType::ALL,
                             )
                             .is_some()
@@ -232,7 +234,10 @@ impl<Backend> LimeWmState<Backend> {
             }
 
             if let Some(output) = self.space.output_under(self.pointer_location).next() {
-                let output_geo = self.space.output_geometry(output).unwrap();
+                let output_geo = self
+                    .space
+                    .output_geometry(output)
+                    .expect("No output geometry");
                 let layers = layer_map_for_output(output);
                 if let Some(layer) = layers
                     .layer_under(WlrLayer::Bottom, self.pointer_location)
@@ -243,7 +248,11 @@ impl<Backend> LimeWmState<Backend> {
                             .surface_under(
                                 self.pointer_location
                                     - output_geo.loc.to_f64()
-                                    - layers.layer_geometry(layer).unwrap().loc.to_f64(),
+                                    - layers
+                                        .layer_geometry(layer)
+                                        .expect("No layer geometry")
+                                        .loc
+                                        .to_f64(),
                                 WindowSurfaceType::ALL,
                             )
                             .is_some()
@@ -258,24 +267,27 @@ impl<Backend> LimeWmState<Backend> {
     pub fn surface_under(&self) -> Option<(WlSurface, Point<i32, Logical>)> {
         let pos = self.pointer_location;
         let output = self.space.outputs().find(|o| {
-            let geometry = self.space.output_geometry(o).unwrap();
+            let geometry = self.space.output_geometry(o).expect("No output geometry");
             geometry.contains(pos.to_i32_round())
         })?;
-        let output_geo = self.space.output_geometry(output).unwrap();
+        let output_geo = self
+            .space
+            .output_geometry(output)
+            .expect("No output geometry");
         let layers = layer_map_for_output(output);
 
         let mut under = None;
         if let Some(window) = output
             .user_data()
             .get::<FullscreenSurface>()
-            .and_then(|f| f.get())
+            .and_then(FullscreenSurface::get)
         {
             under = window.surface_under(pos - output_geo.loc.to_f64(), WindowSurfaceType::ALL);
         } else if let Some(layer) = layers
             .layer_under(WlrLayer::Overlay, pos)
             .or_else(|| layers.layer_under(WlrLayer::Top, pos))
         {
-            let layer_loc = layers.layer_geometry(layer).unwrap().loc;
+            let layer_loc = layers.layer_geometry(layer).expect("No layer geometry").loc;
             under = layer
                 .surface_under(
                     pos - output_geo.loc.to_f64() - layer_loc.to_f64(),
@@ -290,7 +302,7 @@ impl<Backend> LimeWmState<Backend> {
             .layer_under(WlrLayer::Bottom, pos)
             .or_else(|| layers.layer_under(WlrLayer::Background, pos))
         {
-            let layer_loc = layers.layer_geometry(layer).unwrap().loc;
+            let layer_loc = layers.layer_geometry(layer).expect("No layer geometry").loc;
             under = layer
                 .surface_under(
                     pos - output_geo.loc.to_f64() - layer_loc.to_f64(),
@@ -301,15 +313,19 @@ impl<Backend> LimeWmState<Backend> {
         under
     }
 
-    fn on_pointer_axis<B: InputBackend>(&mut self, dh: &DisplayHandle, evt: B::PointerAxisEvent) {
+    fn on_pointer_axis<B: InputBackend>(&mut self, dh: &DisplayHandle, evt: &B::PointerAxisEvent) {
         let source = wl_pointer::AxisSource::from(evt.source());
 
-        let horizontal_amount = evt
-            .amount(input::Axis::Horizontal)
-            .unwrap_or_else(|| evt.amount_discrete(input::Axis::Horizontal).unwrap() * 3.0);
-        let vertical_amount = evt
-            .amount(input::Axis::Vertical)
-            .unwrap_or_else(|| evt.amount_discrete(input::Axis::Vertical).unwrap() * 3.0);
+        let horizontal_amount = evt.amount(input::Axis::Horizontal).unwrap_or_else(|| {
+            evt.amount_discrete(input::Axis::Horizontal)
+                .expect("Event was wrong type")
+                * 3.0
+        });
+        let vertical_amount = evt.amount(input::Axis::Vertical).unwrap_or_else(|| {
+            evt.amount_discrete(input::Axis::Vertical)
+                .expect("Event was wrong type")
+                * 3.0
+        });
         let horizontal_amount_discrete = evt.amount_discrete(input::Axis::Horizontal);
         let vertical_amount_discrete = evt.amount_discrete(input::Axis::Vertical);
 
@@ -331,117 +347,14 @@ impl<Backend> LimeWmState<Backend> {
             } else if source == wl_pointer::AxisSource::Finger {
                 frame = frame.stop(wl_pointer::Axis::VerticalScroll);
             }
-            self.seat.get_pointer().unwrap().axis(self, dh, frame);
+            self.seat
+                .get_pointer()
+                .expect("No mouse pointer found")
+                .axis(self, dh, frame);
         }
     }
 }
 
-#[cfg(any(feature = "winit", feature = "x11"))]
-impl<Backend: crate::state::Backend> LimeWmState<Backend> {
-    pub fn process_input_event_windowed<B: InputBackend>(
-        &mut self,
-        dh: &DisplayHandle,
-        event: InputEvent<B>,
-        output_name: &str,
-    ) {
-        match event {
-            InputEvent::Keyboard { event } => match self.keyboard_key_to_action::<B>(dh, event) {
-                KeyAction::ScaleUp => {
-                    let output = self
-                        .space
-                        .outputs()
-                        .find(|o| o.name() == output_name)
-                        .unwrap()
-                        .clone();
-
-                    let current_scale = output.current_scale().fractional_scale();
-                    let new_scale = current_scale + 0.25;
-                    output.change_current_state(
-                        None,
-                        None,
-                        Some(Scale::Fractional(new_scale)),
-                        None,
-                    );
-
-                    crate::shell::fixup_positions(dh, &mut self.space);
-                    self.backend_data.reset_buffers(&output);
-                }
-
-                KeyAction::ScaleDown => {
-                    let output = self
-                        .space
-                        .outputs()
-                        .find(|o| o.name() == output_name)
-                        .unwrap()
-                        .clone();
-
-                    let current_scale = output.current_scale().fractional_scale();
-                    let new_scale = f64::max(1.0, current_scale - 0.25);
-                    output.change_current_state(
-                        None,
-                        None,
-                        Some(Scale::Fractional(new_scale)),
-                        None,
-                    );
-
-                    crate::shell::fixup_positions(dh, &mut self.space);
-                    self.backend_data.reset_buffers(&output);
-                }
-
-                action => match action {
-                    KeyAction::None | KeyAction::Quit | KeyAction::Run(_) => {
-                        self.process_common_key_action(action)
-                    }
-
-                    _ => warn!(
-                        self.log,
-                        "Key action {:?} unsupported on on output {} backend.", action, output_name
-                    ),
-                },
-            },
-
-            InputEvent::PointerMotionAbsolute { event } => {
-                let output = self
-                    .space
-                    .outputs()
-                    .find(|o| o.name() == output_name)
-                    .unwrap()
-                    .clone();
-                self.on_pointer_move_absolute_windowed::<B>(dh, event, &output)
-            }
-            InputEvent::PointerButton { event } => self.on_pointer_button::<B>(dh, event),
-            InputEvent::PointerAxis { event } => self.on_pointer_axis::<B>(dh, event),
-            _ => (), // other events are not handled in lime_wm (yet)
-        }
-    }
-
-    fn on_pointer_move_absolute_windowed<B: InputBackend>(
-        &mut self,
-        dh: &DisplayHandle,
-        evt: B::PointerMotionAbsoluteEvent,
-        output: &Output,
-    ) {
-        let output_geo = self.space.output_geometry(output).unwrap();
-
-        let pos = evt.position_transformed(output_geo.size) + output_geo.loc.to_f64();
-        self.pointer_location = pos;
-        let serial = SCOUNTER.next_serial();
-
-        let under = self.surface_under();
-        self.seat.get_pointer().unwrap().motion(
-            self,
-            dh,
-            &MotionEvent {
-                location: pos,
-                focus: under,
-                serial,
-                time: evt.time(),
-            },
-        );
-    }
-}
-
-#[cfg(feature = "udev")]
 impl LimeWmState<UdevData> {
     pub fn process_input_event<B: InputBackend>(
         &mut self,
@@ -449,139 +362,156 @@ impl LimeWmState<UdevData> {
         event: InputEvent<B>,
     ) {
         match event {
-            InputEvent::Keyboard { event, .. } => match self.keyboard_key_to_action::<B>(dh, event)
-            {
-                #[cfg(feature = "udev")]
-                KeyAction::VtSwitch(vt) => {
-                    info!(self.log, "Trying to switch to vt {}", vt);
-                    if let Err(err) = self.backend_data.session.change_vt(vt) {
-                        error!(self.log, "Error switching to vt {}: {}", vt, err);
-                    }
-                }
-                KeyAction::Screen(num) => {
-                    let geometry = self
-                        .space
-                        .outputs()
-                        .nth(num)
-                        .map(|o| self.space.output_geometry(o).unwrap());
-
-                    if let Some(geometry) = geometry {
-                        let x = geometry.loc.x as f64 + geometry.size.w as f64 / 2.0;
-                        let y = geometry.size.h as f64 / 2.0;
-                        self.pointer_location = (x, y).into()
-                    }
-                }
-                KeyAction::ScaleUp => {
-                    let pos = self.pointer_location.to_i32_round();
-                    let output = self
-                        .space
-                        .outputs()
-                        .find(|o| self.space.output_geometry(o).unwrap().contains(pos))
-                        .cloned();
-
-                    if let Some(output) = output {
-                        let (output_location, scale) = (
-                            self.space.output_geometry(&output).unwrap().loc,
-                            output.current_scale().fractional_scale(),
-                        );
-                        let new_scale = scale + 0.25;
-                        output.change_current_state(
-                            None,
-                            None,
-                            Some(Scale::Fractional(new_scale)),
-                            None,
-                        );
-
-                        let rescale = scale as f64 / new_scale as f64;
-                        let output_location = output_location.to_f64();
-                        let mut pointer_output_location = self.pointer_location - output_location;
-                        pointer_output_location.x *= rescale;
-                        pointer_output_location.y *= rescale;
-                        self.pointer_location = output_location + pointer_output_location;
-
-                        crate::shell::fixup_positions(dh, &mut self.space);
-                        let under = self.surface_under();
-                        if let Some(ptr) = self.seat.get_pointer() {
-                            ptr.motion(
-                                self,
-                                dh,
-                                &MotionEvent {
-                                    location: self.pointer_location,
-                                    focus: under,
-                                    serial: SCOUNTER.next_serial(),
-                                    time: 0,
-                                },
-                            );
+            InputEvent::Keyboard { event, .. } => {
+                match self.keyboard_key_to_action::<B>(dh, &event) {
+                    KeyAction::VtSwitch(vt) => {
+                        info!(self.log, "Trying to switch to vt {}", vt);
+                        if let Err(err) = self.backend_data.session.change_vt(vt) {
+                            error!(self.log, "Error switching to vt {}: {}", vt, err);
                         }
-                        self.backend_data.reset_buffers(&output);
                     }
-                }
-                KeyAction::ScaleDown => {
-                    let pos = self.pointer_location.to_i32_round();
-                    let output = self
-                        .space
-                        .outputs()
-                        .find(|o| self.space.output_geometry(o).unwrap().contains(pos))
-                        .cloned();
+                    KeyAction::Screen(num) => {
+                        let geometry =
+                            self.space.outputs().nth(num).map(|o| {
+                                self.space.output_geometry(o).expect("No output geometry")
+                            });
 
-                    if let Some(output) = output {
-                        let (output_location, scale) = (
-                            self.space.output_geometry(&output).unwrap().loc,
-                            output.current_scale().fractional_scale(),
-                        );
-                        let new_scale = f64::max(1.0, scale - 0.25);
-                        output.change_current_state(
-                            None,
-                            None,
-                            Some(Scale::Fractional(new_scale)),
-                            None,
-                        );
-
-                        let rescale = scale as f64 / new_scale as f64;
-                        let output_location = output_location.to_f64();
-                        let mut pointer_output_location = self.pointer_location - output_location;
-                        pointer_output_location.x *= rescale;
-                        pointer_output_location.y *= rescale;
-                        self.pointer_location = output_location + pointer_output_location;
-
-                        crate::shell::fixup_positions(dh, &mut self.space);
-                        let under = self.surface_under();
-                        if let Some(ptr) = self.seat.get_pointer() {
-                            ptr.motion(
-                                self,
-                                dh,
-                                &MotionEvent {
-                                    location: self.pointer_location,
-                                    focus: under,
-                                    serial: SCOUNTER.next_serial(),
-                                    time: 0,
-                                },
-                            );
+                        if let Some(geometry) = geometry {
+                            let x = f64::from(geometry.loc.x) + f64::from(geometry.size.w) / 2.0;
+                            let y = f64::from(geometry.size.h) / 2.0;
+                            self.pointer_location = (x, y).into();
                         }
-                        self.backend_data.reset_buffers(&output);
                     }
+                    KeyAction::ScaleUp => {
+                        let pos = self.pointer_location.to_i32_round();
+                        let output = self
+                            .space
+                            .outputs()
+                            .find(|o| {
+                                self.space
+                                    .output_geometry(o)
+                                    .expect("No output geometry")
+                                    .contains(pos)
+                            })
+                            .cloned();
+
+                        if let Some(output) = output {
+                            let (output_location, scale) = (
+                                self.space
+                                    .output_geometry(&output)
+                                    .expect("No output geometry")
+                                    .loc,
+                                output.current_scale().fractional_scale(),
+                            );
+                            let new_scale = scale + 0.25;
+                            output.change_current_state(
+                                None,
+                                None,
+                                Some(Scale::Fractional(new_scale)),
+                                None,
+                            );
+
+                            let rescale = scale as f64 / new_scale as f64;
+                            let output_location = output_location.to_f64();
+                            let mut pointer_output_location =
+                                self.pointer_location - output_location;
+                            pointer_output_location.x *= rescale;
+                            pointer_output_location.y *= rescale;
+                            self.pointer_location = output_location + pointer_output_location;
+
+                            crate::shell::fixup_positions(dh, &mut self.space);
+                            let under = self.surface_under();
+                            if let Some(ptr) = self.seat.get_pointer() {
+                                ptr.motion(
+                                    self,
+                                    dh,
+                                    &MotionEvent {
+                                        location: self.pointer_location,
+                                        focus: under,
+                                        serial: SCOUNTER.next_serial(),
+                                        time: 0,
+                                    },
+                                );
+                            }
+                            self.backend_data.reset_buffers(&output);
+                        }
+                    }
+                    KeyAction::ScaleDown => {
+                        let pos = self.pointer_location.to_i32_round();
+                        let output = self
+                            .space
+                            .outputs()
+                            .find(|o| {
+                                self.space
+                                    .output_geometry(o)
+                                    .expect("no output geometry")
+                                    .contains(pos)
+                            })
+                            .cloned();
+
+                        if let Some(output) = output {
+                            let (output_location, scale) = (
+                                self.space
+                                    .output_geometry(&output)
+                                    .expect("no output geometry")
+                                    .loc,
+                                output.current_scale().fractional_scale(),
+                            );
+                            let new_scale = f64::max(1.0, scale - 0.25);
+                            output.change_current_state(
+                                None,
+                                None,
+                                Some(Scale::Fractional(new_scale)),
+                                None,
+                            );
+
+                            let rescale = scale as f64 / new_scale as f64;
+                            let output_location = output_location.to_f64();
+                            let mut pointer_output_location =
+                                self.pointer_location - output_location;
+                            pointer_output_location.x *= rescale;
+                            pointer_output_location.y *= rescale;
+                            self.pointer_location = output_location + pointer_output_location;
+
+                            crate::shell::fixup_positions(dh, &mut self.space);
+                            let under = self.surface_under();
+                            if let Some(ptr) = self.seat.get_pointer() {
+                                ptr.motion(
+                                    self,
+                                    dh,
+                                    &MotionEvent {
+                                        location: self.pointer_location,
+                                        focus: under,
+                                        serial: SCOUNTER.next_serial(),
+                                        time: 0,
+                                    },
+                                );
+                            }
+                            self.backend_data.reset_buffers(&output);
+                        }
+                    }
+
+                    action => match action {
+                        KeyAction::None | KeyAction::Quit | KeyAction::Run(_) => {
+                            self.process_common_key_action(action);
+                        }
+
+                        _ => unreachable!(),
+                    },
                 }
-
-                action => match action {
-                    KeyAction::None | KeyAction::Quit | KeyAction::Run(_) => {
-                        self.process_common_key_action(action)
-                    }
-
-                    _ => unreachable!(),
-                },
-            },
-            InputEvent::PointerMotion { event, .. } => self.on_pointer_move::<B>(dh, event),
+            }
+            InputEvent::PointerMotion { event, .. } => self.on_pointer_move::<B>(dh, &event),
             InputEvent::PointerMotionAbsolute { event, .. } => {
-                self.on_pointer_move_absolute::<B>(dh, event)
+                self.on_pointer_move_absolute::<B>(dh, &event);
             }
-            InputEvent::PointerButton { event, .. } => self.on_pointer_button::<B>(dh, event),
-            InputEvent::PointerAxis { event, .. } => self.on_pointer_axis::<B>(dh, event),
-            InputEvent::TabletToolAxis { event, .. } => self.on_tablet_tool_axis::<B>(event),
+            InputEvent::PointerButton { event, .. } => self.on_pointer_button::<B>(dh, &event),
+            InputEvent::PointerAxis { event, .. } => self.on_pointer_axis::<B>(dh, &event),
+            InputEvent::TabletToolAxis { event, .. } => self.on_tablet_tool_axis::<B>(&event),
             InputEvent::TabletToolProximity { event, .. } => {
-                self.on_tablet_tool_proximity::<B>(dh, event)
+                self.on_tablet_tool_proximity::<B>(dh, &event);
             }
-            InputEvent::TabletToolTip { event, .. } => self.on_tablet_tool_tip::<B>(dh, event),
-            InputEvent::TabletToolButton { event, .. } => self.on_tablet_button::<B>(event),
+            InputEvent::TabletToolTip { event, .. } => self.on_tablet_tool_tip::<B>(dh, &event),
+            InputEvent::TabletToolButton { event, .. } => self.on_tablet_button::<B>(&event),
             InputEvent::DeviceAdded { device } => {
                 if device.has_capability(DeviceCapability::TabletTool) {
                     self.seat
@@ -607,7 +537,11 @@ impl LimeWmState<UdevData> {
         }
     }
 
-    fn on_pointer_move<B: InputBackend>(&mut self, dh: &DisplayHandle, evt: B::PointerMotionEvent) {
+    fn on_pointer_move<B: InputBackend>(
+        &mut self,
+        dh: &DisplayHandle,
+        evt: &B::PointerMotionEvent,
+    ) {
         let serial = SCOUNTER.next_serial();
         self.pointer_location += evt.delta();
 
@@ -633,21 +567,37 @@ impl LimeWmState<UdevData> {
     fn on_pointer_move_absolute<B: InputBackend>(
         &mut self,
         dh: &DisplayHandle,
-        evt: B::PointerMotionAbsoluteEvent,
+        evt: &B::PointerMotionAbsoluteEvent,
     ) {
         let serial = SCOUNTER.next_serial();
 
         let max_x = self.space.outputs().fold(0, |acc, o| {
-            acc + self.space.output_geometry(o).unwrap().size.w
+            acc + self
+                .space
+                .output_geometry(o)
+                .expect("no output geometry")
+                .size
+                .w
         });
 
         let max_h_output = self
             .space
             .outputs()
-            .max_by_key(|o| self.space.output_geometry(o).unwrap().size.h)
-            .unwrap();
+            .max_by_key(|o| {
+                self.space
+                    .output_geometry(o)
+                    .expect("No output geometry")
+                    .size
+                    .h
+            })
+            .expect("No outputs found");
 
-        let max_y = self.space.output_geometry(max_h_output).unwrap().size.h;
+        let max_y = self
+            .space
+            .output_geometry(max_h_output)
+            .expect("no output geometry")
+            .size
+            .h;
 
         self.pointer_location.x = evt.x_transformed(max_x);
         self.pointer_location.y = evt.y_transformed(max_y);
@@ -670,14 +620,14 @@ impl LimeWmState<UdevData> {
         }
     }
 
-    fn on_tablet_tool_axis<B: InputBackend>(&mut self, evt: B::TabletToolAxisEvent) {
+    fn on_tablet_tool_axis<B: InputBackend>(&mut self, evt: &B::TabletToolAxisEvent) {
         let tablet_seat = self.seat.tablet_seat();
 
         let output_geometry = self
             .space
             .outputs()
             .next()
-            .map(|o| self.space.output_geometry(o).unwrap());
+            .map(|o| self.space.output_geometry(o).expect("no output geometry"));
 
         if let Some(rect) = output_geometry {
             self.pointer_location = evt.position_transformed(rect.size) + rect.loc.to_f64();
@@ -720,7 +670,7 @@ impl LimeWmState<UdevData> {
     fn on_tablet_tool_proximity<B: InputBackend>(
         &mut self,
         dh: &DisplayHandle,
-        evt: B::TabletToolProximityEvent,
+        evt: &B::TabletToolProximityEvent,
     ) {
         let tablet_seat = self.seat.tablet_seat();
 
@@ -728,7 +678,7 @@ impl LimeWmState<UdevData> {
             .space
             .outputs()
             .next()
-            .map(|o| self.space.output_geometry(o).unwrap());
+            .map(|o| self.space.output_geometry(o).expect("no output geometry"));
 
         if let Some(rect) = output_geometry {
             let tool = evt.tool();
@@ -758,7 +708,7 @@ impl LimeWmState<UdevData> {
     fn on_tablet_tool_tip<B: InputBackend>(
         &mut self,
         dh: &DisplayHandle,
-        evt: B::TabletToolTipEvent,
+        evt: &B::TabletToolTipEvent,
     ) {
         let tool = self.seat.tablet_seat().get_tool(&evt.tool());
 
@@ -778,7 +728,7 @@ impl LimeWmState<UdevData> {
         }
     }
 
-    fn on_tablet_button<B: InputBackend>(&mut self, evt: B::TabletToolButtonEvent) {
+    fn on_tablet_button<B: InputBackend>(&mut self, evt: &B::TabletToolButtonEvent) {
         let tool = self.seat.tablet_seat().get_tool(&evt.tool());
 
         if let Some(tool) = tool {
@@ -798,24 +748,36 @@ impl LimeWmState<UdevData> {
 
         let (pos_x, pos_y) = pos.into();
         let max_x = self.space.outputs().fold(0, |acc, o| {
-            acc + self.space.output_geometry(o).unwrap().size.w
+            acc + self
+                .space
+                .output_geometry(o)
+                .expect("No output geometry")
+                .size
+                .w
         });
-        let clamped_x = pos_x.max(0.0).min(max_x as f64);
+        let clamped_x = pos_x.max(0.0).min(f64::from(max_x));
         let max_y = self
             .space
             .outputs()
             .find(|o| {
-                let geo = self.space.output_geometry(o).unwrap();
+                let geo = self.space.output_geometry(o).expect("No output geometry");
                 geo.contains((clamped_x as i32, 0))
             })
-            .map(|o| self.space.output_geometry(o).unwrap().size.h);
+            .map(|o| {
+                self.space
+                    .output_geometry(o)
+                    .expect("No output geometry")
+                    .size
+                    .h
+            });
 
-        if let Some(max_y) = max_y {
-            let clamped_y = pos_y.max(0.0).min(max_y as f64);
-            (clamped_x, clamped_y).into()
-        } else {
-            (clamped_x, pos_y).into()
-        }
+        max_y.map_or_else(
+            || (clamped_x, pos_y).into(),
+            |max_y| {
+                let clamped_y = pos_y.max(0.0).min(f64::from(max_y));
+                (clamped_x, clamped_y).into()
+            },
+        )
     }
 }
 
@@ -846,11 +808,14 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Optio
     } else if (xkb::KEY_XF86Switch_VT_1..=xkb::KEY_XF86Switch_VT_12).contains(&keysym) {
         // VTSwitch
         Some(KeyAction::VtSwitch(
-            (keysym - xkb::KEY_XF86Switch_VT_1 + 1) as i32,
+            i32::try_from(keysym - xkb::KEY_XF86Switch_VT_1 + 1)
+                .expect("VT switch ended up negative"),
         ))
-    } else if modifiers.logo && keysym == xkb::KEY_Return {
+    } else if modifiers.logo && keysym == xkb::KEY_t {
         // run terminal
-        Some(KeyAction::Run("weston-terminal".into()))
+        Some(KeyAction::Run("kitty".into()))
+    } else if modifiers.logo && keysym == xkb::KEY_e {
+        Some(KeyAction::Run("thunar".into()))
     } else if modifiers.logo && keysym >= xkb::KEY_1 && keysym <= xkb::KEY_9 {
         Some(KeyAction::Screen((keysym - xkb::KEY_1) as usize))
     } else if modifiers.logo && modifiers.shift && keysym == xkb::KEY_M {

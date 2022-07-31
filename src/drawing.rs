@@ -36,9 +36,9 @@ pub fn draw_cursor(
         states
             .data_map
             .get::<Mutex<CursorImageAttributes>>()
-            .unwrap()
+            .expect("Cursor image attributes not found")
             .lock()
-            .unwrap()
+            .expect("Cursor image attributes lock poisoned")
             .hotspot
     });
     SurfaceTree {
@@ -73,9 +73,9 @@ pub struct PointerElement<T: Texture> {
 }
 
 impl<T: Texture> PointerElement<T> {
-    pub fn new(texture: T, pointer_pos: Point<i32, Logical>) -> PointerElement<T> {
+    pub fn new(texture: T, pointer_pos: Point<i32, Logical>) -> Self {
         let size = texture.size().to_logical(1, Transform::Normal);
-        PointerElement {
+        Self {
             texture,
             position: pointer_pos,
             size,
@@ -109,7 +109,10 @@ where
         vec![Rectangle::from_loc_and_size(self.position, self.size).to_physical_precise_up(scale)]
     }
 
-    fn opaque_regions(&self, _scale: impl Into<Scale<f64>>) -> Option<Vec<Rectangle<i32, Physical>>> {
+    fn opaque_regions(
+        &self,
+        _scale: impl Into<Scale<f64>>,
+    ) -> Option<Vec<Rectangle<i32, Physical>>> {
         None
     }
 
@@ -181,7 +184,10 @@ where
         vec![Rectangle::from_loc_and_size((0, 0), (24 * 3, 35)).to_physical_precise_up(scale)]
     }
 
-    fn opaque_regions(&self, _scale: impl Into<Scale<f64>>) -> Option<Vec<Rectangle<i32, Physical>>> {
+    fn opaque_regions(
+        &self,
+        _scale: impl Into<Scale<f64>>,
+    ) -> Option<Vec<Rectangle<i32, Physical>>> {
         None
     }
 
@@ -199,11 +205,14 @@ where
         let mut offset: Point<f64, Physical> = Point::from((0.0, 0.0));
         for digit in value_str.chars().map(|d| d.to_digit(10).unwrap()) {
             let digit_location = location + offset;
-            let digit_size = Size::<i32, Logical>::from((22, 35)).to_f64().to_physical(scale);
+            let digit_size = Size::<i32, Logical>::from((22, 35))
+                .to_f64()
+                .to_physical(scale);
             let dst = Rectangle::from_loc_and_size(
                 digit_location.to_i32_round(),
-                ((digit_size.to_point() + digit_location).to_i32_round() - digit_location.to_i32_round())
-                    .to_size(),
+                ((digit_size.to_point() + digit_location).to_i32_round()
+                    - digit_location.to_i32_round())
+                .to_size(),
             );
             let damage = damage
                 .iter()
@@ -243,7 +252,10 @@ where
 }
 
 #[cfg(feature = "debug")]
-pub fn draw_fps<R>(texture: &<R as Renderer>::TextureId, value: u32) -> FpsElement<<R as Renderer>::TextureId>
+pub fn draw_fps<R>(
+    texture: &<R as Renderer>::TextureId,
+    value: u32,
+) -> FpsElement<<R as Renderer>::TextureId>
 where
     R: Renderer + ImportAll,
     <R as Renderer>::TextureId: Clone,

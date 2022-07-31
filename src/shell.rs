@@ -87,7 +87,7 @@ impl<BackendData> PointerGrab<LimeWmState<BackendData>> for MoveSurfaceGrab {
         handle: &mut PointerInnerHandle<'_, LimeWmState<BackendData>>,
         details: AxisFrame,
     ) {
-        handle.axis(details)
+        handle.axis(details);
     }
 
     fn start_data(&self) -> &PointerGrabStartData {
@@ -112,14 +112,14 @@ bitflags::bitflags! {
 impl From<xdg_toplevel::ResizeEdge> for ResizeEdge {
     #[inline]
     fn from(x: xdg_toplevel::ResizeEdge) -> Self {
-        Self::from_bits(x as u32).unwrap()
+        Self::from_bits(x as u32).expect("Invalid ResizeEdge bitflags")
     }
 }
 
 impl From<ResizeEdge> for xdg_toplevel::ResizeEdge {
     #[inline]
     fn from(x: ResizeEdge) -> Self {
-        Self::try_from(x.bits()).unwrap()
+        Self::try_from(x.bits()).expect("Invalid ResizeEdge bitflags")
     }
 }
 
@@ -162,7 +162,7 @@ impl<BackendData> PointerGrab<LimeWmState<BackendData>> for ResizeSurfaceGrab {
                 dx = -dx;
             }
 
-            new_window_width = (self.initial_window_size.w as f64 + dx) as i32;
+            new_window_width = (f64::from(self.initial_window_size.w) + dx) as i32;
         }
 
         if self.edges.intersects(top_bottom) {
@@ -170,7 +170,7 @@ impl<BackendData> PointerGrab<LimeWmState<BackendData>> for ResizeSurfaceGrab {
                 dy = -dy;
             }
 
-            new_window_height = (self.initial_window_size.h as f64 + dy) as i32;
+            new_window_height = (f64::from(self.initial_window_size.h) + dy) as i32;
         }
 
         let (min_size, max_size) = with_states(self.window.toplevel().wl_surface(), |states| {
@@ -237,7 +237,10 @@ impl<BackendData> PointerGrab<LimeWmState<BackendData>> for ResizeSurfaceGrab {
                 xdg.send_configure();
                 if self.edges.intersects(ResizeEdge::TOP_LEFT) {
                     let geometry = self.window.geometry();
-                    let mut location = data.space.window_location(&self.window).unwrap();
+                    let mut location = data
+                        .space
+                        .window_location(&self.window)
+                        .expect("Window not found");
 
                     if self.edges.intersects(ResizeEdge::LEFT) {
                         location.x = self.initial_window_location.x
@@ -255,7 +258,7 @@ impl<BackendData> PointerGrab<LimeWmState<BackendData>> for ResizeSurfaceGrab {
                     let mut data = states
                         .data_map
                         .get::<RefCell<SurfaceData>>()
-                        .unwrap()
+                        .expect("SurfaceData not found")
                         .borrow_mut();
                     if let ResizeState::Resizing(resize_data) = data.resize_state {
                         data.resize_state =
@@ -269,7 +272,7 @@ impl<BackendData> PointerGrab<LimeWmState<BackendData>> for ResizeSurfaceGrab {
                     let mut data = states
                         .data_map
                         .get::<RefCell<SurfaceData>>()
-                        .unwrap()
+                        .expect("SurfaceData not found")
                         .borrow_mut();
                     if let ResizeState::Resizing(resize_data) = data.resize_state {
                         data.resize_state = ResizeState::WaitingForCommit(resize_data);
@@ -288,7 +291,7 @@ impl<BackendData> PointerGrab<LimeWmState<BackendData>> for ResizeSurfaceGrab {
         handle: &mut PointerInnerHandle<'_, LimeWmState<BackendData>>,
         details: AxisFrame,
     ) {
-        handle.axis(details)
+        handle.axis(details);
     }
 
     fn start_data(&self) -> &PointerGrabStartData {
@@ -351,7 +354,7 @@ impl<BackendData: Backend> CompositorHandler for LimeWmState<BackendData> {
         self.space.commit(surface);
         self.popups.commit(surface);
 
-        ensure_initial_configure(dh, surface, &self.space, &mut self.popups)
+        ensure_initial_configure(dh, surface, &self.space, &mut self.popups);
     }
 }
 
@@ -417,23 +420,25 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
         seat: wl_seat::WlSeat,
         serial: Serial,
     ) {
-        let seat: Seat<LimeWmState<BackendData>> = Seat::from_resource(&seat).unwrap();
+        let seat: Seat<Self> = Seat::from_resource(&seat).expect("Seat not found");
         // TODO: touch move.
-        let pointer = seat.get_pointer().unwrap();
+        let pointer = seat.get_pointer().expect("Mouse pointer not found");
 
         // Check that this surface has a click grab.
         if !pointer.has_grab(serial) {
             return;
         }
 
-        let start_data = pointer.grab_start_data().unwrap();
+        let start_data = pointer
+            .grab_start_data()
+            .expect("Grab start data not found");
 
         // If the focus was for a different surface, ignore the request.
         if start_data.focus.is_none()
             || !start_data
                 .focus
                 .as_ref()
-                .unwrap()
+                .expect("Mouse grab focus not found")
                 .0
                 .id()
                 .same_client_as(&surface.wl_surface().id())
@@ -444,9 +449,12 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
         let window = self
             .space
             .window_for_surface(surface.wl_surface(), WindowSurfaceType::TOPLEVEL)
-            .unwrap()
+            .expect("No surface found for given window")
             .clone();
-        let mut initial_window_location = self.space.window_location(&window).unwrap();
+        let mut initial_window_location = self
+            .space
+            .window_location(&window)
+            .expect("Window not found");
 
         // If surface is maximized then unmaximize it
         let current_state = surface.current_state();
@@ -493,23 +501,25 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
         serial: Serial,
         edges: xdg_toplevel::ResizeEdge,
     ) {
-        let seat: Seat<LimeWmState<BackendData>> = Seat::from_resource(&seat).unwrap();
+        let seat: Seat<Self> = Seat::from_resource(&seat).expect("Seat not found");
         // TODO: touch resize.
-        let pointer = seat.get_pointer().unwrap();
+        let pointer = seat.get_pointer().expect("Mouse pointer not found");
 
         // Check that this surface has a click grab.
         if !pointer.has_grab(serial) {
             return;
         }
 
-        let start_data = pointer.grab_start_data().unwrap();
+        let start_data = pointer
+            .grab_start_data()
+            .expect("Grab start data not found");
 
         // If the focus was for a different surface, ignore the request.
         if start_data.focus.is_none()
             || !start_data
                 .focus
                 .as_ref()
-                .unwrap()
+                .expect("Mouse grab focus not found")
                 .0
                 .id()
                 .same_client_as(&surface.wl_surface().id())
@@ -520,17 +530,20 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
         let window = self
             .space
             .window_for_surface(surface.wl_surface(), WindowSurfaceType::TOPLEVEL)
-            .unwrap()
+            .expect("No surface found for given window")
             .clone();
         let geometry = window.geometry();
-        let loc = self.space.window_location(&window).unwrap();
+        let loc = self
+            .space
+            .window_location(&window)
+            .expect("Window not found");
         let (initial_window_location, initial_window_size) = (loc, geometry.size);
 
         with_states(surface.wl_surface(), move |states| {
             states
                 .data_map
                 .get::<RefCell<SurfaceData>>()
-                .unwrap()
+                .expect("Surface data not found")
                 .borrow_mut()
                 .resize_state = ResizeState::Resizing(ResizeData {
                 edges: edges.into(),
@@ -576,9 +589,9 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
                     states
                         .data_map
                         .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
-                        .unwrap()
+                        .expect("Surface role data not found")
                         .lock()
-                        .unwrap()
+                        .expect("Surface role data lock poisoned")
                         .current
                         .states
                         .contains(xdg_toplevel::State::Resizing)
@@ -589,7 +602,7 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
                         let mut data = states
                             .data_map
                             .get::<RefCell<SurfaceData>>()
-                            .unwrap()
+                            .expect("Surface data not found")
                             .borrow_mut();
                         if let ResizeState::WaitingForFinalAck(resize_data, _) = data.resize_state {
                             data.resize_state = ResizeState::WaitingForCommit(resize_data);
@@ -620,8 +633,14 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
             let output = wl_output
                 .as_ref()
                 .and_then(Output::from_resource)
-                .unwrap_or_else(|| self.space.outputs().next().unwrap().clone());
-            let client = dh.get_client(wl_surface.id()).unwrap();
+                .unwrap_or_else(|| {
+                    self.space
+                        .outputs()
+                        .next()
+                        .expect("Space has no outputs")
+                        .clone()
+                });
+            let client = dh.get_client(wl_surface.id()).expect("Client not found");
             output.with_client_outputs(dh, &client, |_dh, output| {
                 wl_output = Some(output.clone());
             });
@@ -635,7 +654,7 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
             let window = self
                 .space
                 .window_for_surface(wl_surface, WindowSurfaceType::TOPLEVEL)
-                .unwrap();
+                .expect("No surface found for given window");
             window.configure();
             output
                 .user_data()
@@ -643,7 +662,7 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
             output
                 .user_data()
                 .get::<FullscreenSurface>()
-                .unwrap()
+                .expect("Fullscreen surface not found")
                 .set(window.clone());
             slog::trace!(self.log, "Fullscreening: {:?}", window);
         }
@@ -656,7 +675,7 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
             state.fullscreen_output.take()
         });
         if let Some(output) = ret {
-            let output = Output::from_resource(&output).unwrap();
+            let output = Output::from_resource(&output).expect("Output not found");
             if let Some(fullscreen) = output.user_data().get::<FullscreenSurface>() {
                 slog::trace!(self.log, "Unfullscreening: {:?}", fullscreen.get());
                 fullscreen.clear();
@@ -673,10 +692,13 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
         let window = self
             .space
             .window_for_surface(surface.wl_surface(), WindowSurfaceType::TOPLEVEL)
-            .unwrap()
+            .expect("No surface found for given window")
             .clone();
         let output = &self.space.outputs_for_window(&window)[0];
-        let geometry = self.space.output_geometry(output).unwrap();
+        let geometry = self
+            .space
+            .output_geometry(output)
+            .expect("no output geometry");
 
         self.space.map_window(&window, geometry.loc, None, true);
         surface.with_pending_state(|state| {
@@ -701,7 +723,7 @@ impl<BackendData: Backend> XdgShellHandler for LimeWmState<BackendData> {
         seat: wl_seat::WlSeat,
         serial: Serial,
     ) {
-        let seat: Seat<LimeWmState<BackendData>> = Seat::from_resource(&seat).unwrap();
+        let seat: Seat<Self> = Seat::from_resource(&seat).expect("Seat not found");
         let ret = self.popups.grab_popup(dh, surface.into(), &seat, serial);
 
         if let Ok(mut grab) = ret {
@@ -747,10 +769,16 @@ impl<BackendData> WlrLayerShellHandler for LimeWmState<BackendData> {
         let output = wl_output
             .as_ref()
             .and_then(Output::from_resource)
-            .unwrap_or_else(|| self.space.outputs().next().unwrap().clone());
+            .unwrap_or_else(|| {
+                self.space
+                    .outputs()
+                    .next()
+                    .expect("No outputs for the space")
+                    .clone()
+            });
         let mut map = layer_map_for_output(&output);
         map.map_layer(dh, &LayerSurface::new(surface, namespace))
-            .unwrap();
+            .expect("Failed to map layer surface");
     }
 }
 
@@ -780,7 +808,7 @@ pub enum ResizeState {
 
 impl Default for ResizeState {
     fn default() -> Self {
-        ResizeState::NotResizing
+        Self::NotResizing
     }
 }
 
@@ -819,9 +847,9 @@ fn ensure_initial_configure(
                 states
                     .data_map
                     .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
-                    .unwrap()
+                    .expect("No surface role data")
                     .lock()
-                    .unwrap()
+                    .expect("Surface role data lock poisoned")
                     .initial_configure_sent
             });
             if !initial_configure_sent {
@@ -833,7 +861,7 @@ fn ensure_initial_configure(
             let mut data = states
                 .data_map
                 .get::<RefCell<SurfaceData>>()
-                .unwrap()
+                .expect("No surface data")
                 .borrow_mut();
 
             // Finish resizing.
@@ -851,9 +879,9 @@ fn ensure_initial_configure(
             states
                 .data_map
                 .get::<Mutex<XdgPopupSurfaceRoleAttributes>>()
-                .unwrap()
+                .expect("No surface role data")
                 .lock()
-                .unwrap()
+                .expect("Surface role data lock poisoned")
                 .initial_configure_sent
         });
         if !initial_configure_sent {
@@ -873,16 +901,16 @@ fn ensure_initial_configure(
         let mut map = layer_map_for_output(output);
         let layer = map
             .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
-            .unwrap();
+            .expect("No layer for surface");
 
         // send the initial configure if relevant
         let initial_configure_sent = with_states(surface, |states| {
             states
                 .data_map
                 .get::<Mutex<LayerSurfaceAttributes>>()
-                .unwrap()
+                .expect("No layer surface attributes")
                 .lock()
-                .unwrap()
+                .expect("Layer surface attributes lock poisoned")
                 .initial_configure_sent
         });
         if !initial_configure_sent {
@@ -922,11 +950,10 @@ fn place_new_window(space: &mut Space, window: &Window, activate: bool) {
 pub fn fixup_positions(dh: &DisplayHandle, space: &mut Space) {
     // fixup outputs
     let mut offset = Point::<i32, Logical>::from((0, 0));
-    for output in space.outputs().cloned().collect::<Vec<_>>().into_iter() {
+    for output in space.outputs().cloned().collect::<Vec<_>>() {
         let size = space
             .output_geometry(&output)
-            .map(|geo| geo.size)
-            .unwrap_or_else(|| Size::from((0, 0)));
+            .map_or_else(|| Size::from((0, 0)), |geo| geo.size);
         space.map_output(&output, offset);
         layer_map_for_output(&output).arrange(dh);
         offset.x += size.w;
@@ -936,7 +963,7 @@ pub fn fixup_positions(dh: &DisplayHandle, space: &mut Space) {
     let mut orphaned_windows = Vec::new();
     let outputs = space
         .outputs()
-        .flat_map(|o| {
+        .filter_map(|o| {
             let geo = space.output_geometry(o)?;
             let map = layer_map_for_output(o);
             let zone = map.non_exclusive_zone();
@@ -954,7 +981,7 @@ pub fn fixup_positions(dh: &DisplayHandle, space: &mut Space) {
             orphaned_windows.push(window.clone());
         }
     }
-    for window in orphaned_windows.into_iter() {
+    for window in orphaned_windows {
         place_new_window(space, &window, false);
     }
 }
