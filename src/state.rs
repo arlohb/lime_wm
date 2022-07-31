@@ -255,7 +255,7 @@ impl<BackendData: Backend + 'static> LimeWmState<BackendData> {
                     };
                 })
                 .expect("Failed to init wayland socket source");
-            info!(log, "Listening on wayland socket"; "name" => socket_name.clone());
+            slog::info!(log, "Listening on wayland socket"; "name" => socket_name.clone());
             ::std::env::set_var("WAYLAND_DISPLAY", &socket_name);
             Some(socket_name)
         } else {
@@ -322,9 +322,10 @@ impl<BackendData: Backend + 'static> LimeWmState<BackendData> {
                 XWaylandEvent::Exited => data.state.xwayland_exited(),
             });
             if let Err(e) = ret {
-                error!(
+                slog::error!(
                     log,
-                    "Failed to insert the XWaylandSource into the event loop: {}", e
+                    "Failed to insert the XWaylandSource into the event loop: {}",
+                    e
                 );
             }
             xwayland

@@ -54,7 +54,7 @@ pub fn draw_dnd_icon(
     log: &Logger,
 ) -> SurfaceTree {
     if get_role(&surface) != Some("dnd_icon") {
-        warn!(
+        slog::warn!(
             log,
             "Trying to display as a dnd icon a surface that does not have the DndIcon role."
         );

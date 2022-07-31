@@ -50,15 +50,15 @@ impl<Backend> LimeWmState<Backend> {
             KeyAction::None => (),
 
             KeyAction::Quit => {
-                info!(self.log, "Quitting.");
+                slog::info!(self.log, "Quitting.");
                 self.running.store(false, Ordering::SeqCst);
             }
 
             KeyAction::Run(cmd) => {
-                info!(self.log, "Starting program"; "cmd" => cmd.clone());
+                slog::info!(self.log, "Starting program"; "cmd" => cmd.clone());
 
                 if let Err(e) = Command::new(&cmd).spawn() {
-                    error!(self.log,
+                    slog::error!(self.log,
                         "Failed to start program";
                         "cmd" => cmd,
                         "err" => format!("{:?}", e)
@@ -80,7 +80,7 @@ impl<Backend> LimeWmState<Backend> {
     ) -> KeyAction {
         let keycode = evt.key_code();
         let state = evt.state();
-        debug!(self.log, "key"; "keycode" => keycode, "state" => format!("{:?}", state));
+        slog::debug!(self.log, "key"; "keycode" => keycode, "state" => format!("{:?}", state));
         let serial = SCOUNTER.next_serial();
         let time = Event::time(evt);
         let keyboard = self.seat.get_keyboard().expect("No keyboard found");
@@ -104,7 +104,7 @@ impl<Backend> LimeWmState<Backend> {
             .input(dh, keycode, state, serial, time, |modifiers, handle| {
                 let keysym = handle.modified_sym();
 
-                debug!(self.log, "keysym";
+                slog::debug!(self.log, "keysym";
                     "state" => format!("{:?}", state),
                     "mods" => format!("{:?}", modifiers),
                     "keysym" => ::xkbcommon::xkb::keysym_get_name(keysym)
@@ -365,9 +365,9 @@ impl LimeWmState<UdevData> {
             InputEvent::Keyboard { event, .. } => {
                 match self.keyboard_key_to_action::<B>(dh, &event) {
                     KeyAction::VtSwitch(vt) => {
-                        info!(self.log, "Trying to switch to vt {}", vt);
+                        slog::info!(self.log, "Trying to switch to vt {}", vt);
                         if let Err(err) = self.backend_data.session.change_vt(vt) {
-                            error!(self.log, "Error switching to vt {}: {}", vt, err);
+                            slog::error!(self.log, "Error switching to vt {}: {}", vt, err);
                         }
                     }
                     KeyAction::Screen(num) => {

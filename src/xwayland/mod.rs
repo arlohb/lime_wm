@@ -24,7 +24,7 @@ use x11rb::{
 impl<BackendData: 'static> LimeWmState<BackendData> {
     pub fn start_xwayland(&mut self) {
         if let Err(e) = self.xwayland.start(self.handle.clone()) {
-            error!(self.log, "Failed to start XWayland: {}", e);
+            slog::error!(self.log, "Failed to start XWayland: {}", e);
         }
     }
 
@@ -38,7 +38,7 @@ impl<BackendData: 'static> LimeWmState<BackendData> {
                 if let Some(x11) = data.state.x11_state.as_mut() {
                     match x11.handle_event(&event, &data.display.handle(), &mut data.state.space) {
                         Ok(()) => {}
-                        Err(err) => error!(log, "Error while handling X11 event: {}", err),
+                        Err(err) => slog::error!(log, "Error while handling X11 event: {}", err),
                     }
                 }
             })
@@ -47,7 +47,7 @@ impl<BackendData: 'static> LimeWmState<BackendData> {
 
     pub fn xwayland_exited(&mut self) {
         let _state = self.x11_state.take();
-        error!(self.log, "Xwayland crashed");
+        slog::error!(self.log, "Xwayland crashed");
     }
 }
 
@@ -139,7 +139,7 @@ impl X11State {
         dh: &DisplayHandle,
         space: &mut Space,
     ) -> Result<(), ReplyOrIdError> {
-        debug!(self.log, "X11: Got event {:?}", event);
+        slog::debug!(self.log, "X11: Got event {:?}", event);
         match event {
             Event::ConfigureRequest(r) => {
                 // Just grant the wish
@@ -183,7 +183,7 @@ impl X11State {
                         match self.conn.get_geometry(msg.window)?.reply() {
                             Ok(geo) => (i32::from(geo.x), i32::from(geo.y)).into(),
                             Err(err) => {
-                                error!(
+                                slog::error!(
                                     self.log,
                                     "Failed to get geometry for {:x}, perhaps the window was already destroyed?",
                                     msg.window;
@@ -202,7 +202,7 @@ impl X11State {
                             self.unpaired_surfaces.insert(id, (msg.window, location));
                         }
                         Ok(surface) => {
-                            debug!(
+                            slog::debug!(
                                 self.log,
                                 "X11 surface {:x?} corresponds to WlSurface {:x} = {:?}",
                                 msg.window,
@@ -227,14 +227,16 @@ impl X11State {
         location: Point<i32, Logical>,
         space: &mut Space,
     ) {
-        debug!(
+        slog::debug!(
             self.log,
-            "Matched X11 surface {:x?} to {:x?}", window, surface
+            "Matched X11 surface {:x?} to {:x?}",
+            window,
+            surface
         );
 
         if give_role(&surface, "x11_surface").is_err() {
             // It makes no sense to post a protocol error here since that would only kill Xwayland
-            error!(self.log, "Surface {:x?} already has a role?!", surface);
+            slog::error!(self.log, "Surface {:x?} already has a role?!", surface);
             return;
         }
 

@@ -163,7 +163,7 @@ impl Backend for UdevData {
             .gpus
             .early_import(Some(self.primary_gpu), self.primary_gpu, surface)
         {
-            warn!(self.logger, "Early buffer import failed: {}", err);
+            slog::warn!(self.logger, "Early buffer import failed: {}", err);
         }
     }
 }
@@ -178,7 +178,7 @@ pub fn run_udev(log: &Logger) {
     let (session, notifier) = match AutoSession::new(log.clone()) {
         Some(ret) => ret,
         None => {
-            crit!(log, "Could not initialize a session");
+            slog::crit!(log, "Could not initialize a session");
             return;
         }
     };
@@ -206,7 +206,7 @@ pub fn run_udev(log: &Logger) {
                     .expect("No GPU!")
             })
     };
-    info!(log, "Using {} as primary gpu.", primary_gpu);
+    slog::info!(log, "Using {} as primary gpu.", primary_gpu);
 
     #[cfg_attr(not(feature = "egl"), allow(unused_mut))]
     let mut gpus =
@@ -219,12 +219,13 @@ pub fn run_udev(log: &Logger) {
 
     #[cfg(feature = "egl")]
     {
-        info!(
+        slog::info!(
             log,
-            "Trying to initialize EGL Hardware Acceleration via {:?}", primary_gpu
+            "Trying to initialize EGL Hardware Acceleration via {:?}",
+            primary_gpu
         );
         if renderer.bind_wl_display(&display.handle()).is_ok() {
-            info!(log, "EGL hardware-acceleration enabled");
+            slog::info!(log, "EGL hardware-acceleration enabled");
         }
     }
 
@@ -248,7 +249,7 @@ pub fn run_udev(log: &Logger) {
     // TODO: This does not necessarily depend on egl, but mesa makes no use of it without wl_drm right now
     #[cfg(feature = "egl")]
     let dmabuf_state = if renderer.bind_wl_display(&display.handle()).is_ok() {
-        info!(log, "EGL hardware-acceleration enabled");
+        slog::info!(log, "EGL hardware-acceleration enabled");
         let dmabuf_formats = renderer.dmabuf_formats().copied().collect::<Vec<_>>();
         let mut state = DmabufState::new();
         let global = state.create_global::<LimeWmState<UdevData>, _>(
@@ -284,7 +285,7 @@ pub fn run_udev(log: &Logger) {
     let udev_backend = match UdevBackend::new(&state.seat_name, log.clone()) {
         Ok(ret) => ret,
         Err(err) => {
-            crit!(log, "Failed to initialize udev backend"; "error" => err);
+            slog::crit!(log, "Failed to initialize udev backend"; "error" => err);
             return;
         }
     };
@@ -415,7 +416,7 @@ fn scan_connectors(
                 .expect("Failed to get connector")
         })
         .filter(|conn| conn.state() == ConnectorState::Connected)
-        .inspect(|conn| info!(logger, "Connected: {:?}", conn.interface()))
+        .inspect(|conn| slog::info!(logger, "Connected: {:?}", conn.interface()))
         .collect();
 
     let mut backends = HashMap::new();
@@ -455,7 +456,7 @@ fn scan_connectors(
                 Entry::Occupied(_) => continue,
             };
 
-            info!(
+            slog::info!(
                 logger,
                 "Trying to setup connector {:?}-{} with crtc {:?}",
                 connector_info.interface(),
@@ -467,7 +468,7 @@ fn scan_connectors(
             let mut surface = match device.create_surface(crtc, mode, &[connector_info.handle()]) {
                 Ok(surface) => surface,
                 Err(err) => {
-                    warn!(logger, "Failed to create drm surface: {}", err);
+                    slog::warn!(logger, "Failed to create drm surface: {}", err);
                     continue;
                 }
             };
@@ -481,7 +482,7 @@ fn scan_connectors(
             ) {
                 Ok(renderer) => renderer,
                 Err(err) => {
-                    warn!(logger, "Failed to create rendering surface: {}", err);
+                    slog::warn!(logger, "Failed to create rendering surface: {}", err);
                     continue;
                 }
             };
@@ -572,17 +573,21 @@ impl LimeWmState<UdevData> {
         let (mut device, gbm) = match devices {
             Some((Ok(drm), Ok(gbm))) => (drm, gbm),
             Some((Err(err), _)) => {
-                warn!(
+                slog::warn!(
                     self.log,
-                    "Skipping device {:?}, because of drm error: {}", device_id, err
+                    "Skipping device {:?}, because of drm error: {}",
+                    device_id,
+                    err
                 );
                 return;
             }
             Some((_, Err(err))) => {
                 // TODO try DumbBuffer allocator in this case
-                warn!(
+                slog::warn!(
                     self.log,
-                    "Skipping device {:?}, because of gbm error: {}", device_id, err
+                    "Skipping device {:?}, because of gbm error: {}",
+                    device_id,
+                    err
                 );
                 return;
             }
@@ -593,9 +598,11 @@ impl LimeWmState<UdevData> {
         let node = match DrmNode::from_dev_id(device_id) {
             Ok(node) => node,
             Err(err) => {
-                warn!(
+                slog::warn!(
                     self.log,
-                    "Failed to access drm node for {}: {}", device_id, err
+                    "Failed to access drm node for {}: {}",
+                    device_id,
+                    err
                 );
                 return;
             }
@@ -627,7 +634,7 @@ impl LimeWmState<UdevData> {
             move |event, _, data: &mut CalloopData<_>| match event {
                 DrmEvent::VBlank(crtc) => data.state.render(node, Some(crtc)),
                 DrmEvent::Error(error) => {
-                    error!(data.state.log, "{:?}", error);
+                    slog::error!(data.state.log, "{:?}", error);
                 }
             },
         );
@@ -638,7 +645,7 @@ impl LimeWmState<UdevData> {
 
         for backend in backends.borrow_mut().values() {
             // render first frame
-            trace!(self.log, "Scheduling frame");
+            slog::trace!(self.log, "Scheduling frame");
             schedule_initial_render(
                 &mut self.backend_data.gpus,
                 backend.clone(),
@@ -723,7 +730,7 @@ impl LimeWmState<UdevData> {
         if let Some(backend_data) = self.backend_data.backends.remove(&node) {
             // drop surfaces
             backend_data.surfaces.borrow_mut().clear();
-            debug!(self.log, "Surfaces dropped");
+            slog::debug!(self.log, "Surfaces dropped");
 
             for output in self
                 .space
@@ -743,7 +750,7 @@ impl LimeWmState<UdevData> {
             self.handle.remove(backend_data.registration_token);
             let _device = backend_data.event_dispatcher.into_source_inner();
 
-            debug!(self.log, "Dropping device");
+            slog::debug!(self.log, "Dropping device");
         }
     }
 
@@ -752,9 +759,10 @@ impl LimeWmState<UdevData> {
         let device_backend = match self.backend_data.backends.get_mut(&dev_id) {
             Some(backend) => backend,
             None => {
-                error!(
+                slog::error!(
                     self.log,
-                    "Trying to render on non-existent backend {}", dev_id
+                    "Trying to render on non-existent backend {}",
+                    dev_id
                 );
                 return;
             }
@@ -827,7 +835,7 @@ impl LimeWmState<UdevData> {
             let reschedule = match result {
                 Ok(has_rendered) => !has_rendered,
                 Err(err) => {
-                    warn!(self.log, "Error during rendering: {:?}", err);
+                    slog::warn!(self.log, "Error during rendering: {:?}", err);
                     match err {
                         SwapBuffersError::AlreadySwapped => false,
                         SwapBuffersError::TemporaryFailure(err) => !matches!(
@@ -979,7 +987,7 @@ fn schedule_initial_render(
             SwapBuffersError::AlreadySwapped => {}
             SwapBuffersError::TemporaryFailure(err) => {
                 // TODO dont reschedule after 3(?) retries
-                warn!(logger, "Failed to submit page_flip: {}", err);
+                slog::warn!(logger, "Failed to submit page_flip: {}", err);
                 let handle = evt_handle.clone();
                 evt_handle.insert_idle(move |data| {
                     schedule_initial_render(
