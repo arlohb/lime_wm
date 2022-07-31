@@ -11,6 +11,9 @@ use std::{
 
 use slog::Logger;
 
+#[cfg(feature = "debug")]
+use crate::drawing::{draw_fps, FpsElement, FPS_NUMBERS_PNG};
+
 use crate::{
     drawing::{draw_cursor, draw_dnd_icon, PointerElement, CLEAR_COLOR},
     state::{Backend, CalloopData, LimeWmState},
@@ -235,12 +238,16 @@ pub fn run_udev(log: &Logger) {
         image::ImageFormat::Png,
     )
     .decode()
-    .unwrap();
+    .expect("Failed to decode FPS image");
     #[cfg(feature = "debug")]
     let fps_texture = renderer
         .import_memory(
             &fps_image.to_rgba8(),
-            (fps_image.width() as i32, fps_image.height() as i32).into(),
+            (
+                i32::try_from(fps_image.width()).expect("Image width is too large"),
+                i32::try_from(fps_image.height()).expect("Image height is too large"),
+            )
+                .into(),
             false,
         )
         .expect("Unable to upload FPS texture");
@@ -941,6 +948,7 @@ fn render_surface(
         #[cfg(feature = "debug")]
         {
             elements.push(
+                #[allow(clippy::cast_sign_loss)]
                 draw_fps::<UdevRenderer<'_>>(fps_texture, surface.fps.avg().round() as u32).into(),
             );
             surface.fps.tick();

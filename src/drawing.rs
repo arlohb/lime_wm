@@ -203,7 +203,10 @@ where
         let value_str = std::cmp::min(self.value, 999).to_string();
         let scale = scale.into();
         let mut offset: Point<f64, Physical> = Point::from((0.0, 0.0));
-        for digit in value_str.chars().map(|d| d.to_digit(10).unwrap()) {
+        for digit in value_str
+            .chars()
+            .map(|d| d.to_digit(10).unwrap_or_else(|| unreachable!()))
+        {
             let digit_location = location + offset;
             let digit_size = Size::<i32, Logical>::from((22, 35))
                 .to_f64()
@@ -216,8 +219,8 @@ where
             );
             let damage = damage
                 .iter()
-                .cloned()
-                .flat_map(|x| x.intersection(dst))
+                .copied()
+                .filter_map(|x| x.intersection(dst))
                 .map(|mut x| {
                     x.loc -= dst.loc;
                     x
